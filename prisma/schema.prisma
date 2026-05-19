@@ -91,26 +91,39 @@ model TraderProfile {
 }
 
 model Market {
-  id               String        @id @default(cuid())
-  externalMarketId String
-  source           MarketSource
-  title            String
-  description      String?
-  category         String?
-  status           MarketStatus  @default(ACTIVE)
-  resolutionDate   DateTime?
-  externalUrl      String?
-  yesTokenId       String?
-  noTokenId        String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  positions        Position[]
-  signals          TradeSignal[]
+  id                    String        @id @default(cuid())
+  externalMarketId      String
+  source                MarketSource
+  title                 String
+  description           String?
+  category              String?
+  status                MarketStatus  @default(ACTIVE)
+  resolutionDate        DateTime?
+  externalUrl           String?
+  yesTokenId            String?
+  noTokenId             String?
+  slug                  String?
+  conditionId           String?
+  questionId            String?
+  orderBookEnabled      Boolean       @default(false)
+  acceptingOrders       Boolean       @default(false)
+  orderPriceMinTickSize Decimal?      @db.Decimal(18, 8)
+  orderMinSize          Decimal?      @db.Decimal(18, 8)
+  lastTradePrice        Decimal?      @db.Decimal(18, 8)
+  bestBid               Decimal?      @db.Decimal(18, 8)
+  bestAsk               Decimal?      @db.Decimal(18, 8)
+  syncedAt              DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  positions             Position[]
+  signals               TradeSignal[]
 
   @@unique([source, externalMarketId])
   @@index([source])
   @@index([status])
   @@index([category])
+  @@index([conditionId])
+  @@index([questionId])
 }
 
 model Position {
