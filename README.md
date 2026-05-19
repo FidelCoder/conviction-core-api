@@ -47,6 +47,10 @@ npm run db:deploy
 - `GET /health` returns API health status.
 - `GET /markets` returns persisted market records. Until a real provider integration is added, this returns an empty list when no markets have been synced.
 - `GET /markets/:id` returns one persisted market record by internal market id.
+- `POST /signals` creates a trade signal against an existing trader profile and synced market.
+- `GET /signals/:id` returns one trade signal.
+- `GET /markets/:marketId/signals` returns signals for one market.
+- `GET /trader-profiles/:traderProfileId/signals` returns signals from one trader profile.
 
 ## Market Data
 
@@ -66,6 +70,33 @@ npm run markets:sync:polymarket -- --limit=50
 ```
 
 If Polymarket or PostgreSQL is unavailable, the command exits with `POLYMARKET_SYNC_FAILED` and does not insert placeholder records.
+
+## Trade Signals
+
+Trade signals are expressions of thesis or intent. Creating a signal does not create a position, calculate PnL, or imply execution. The referenced trader profile and market must already exist in the database.
+
+Create a signal:
+
+```sh
+curl -X POST http://localhost:3000/signals \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "traderProfileId": "existing-trader-profile-id",
+    "marketId": "existing-market-id",
+    "side": "YES",
+    "thesis": "Market thesis based on the trader's real view.",
+    "convictionLevel": 75,
+    "source": "WEB"
+  }'
+```
+
+Read signals:
+
+```sh
+curl http://localhost:3000/signals/:id
+curl http://localhost:3000/markets/:marketId/signals
+curl http://localhost:3000/trader-profiles/:traderProfileId/signals
+```
 
 ## Structure
 

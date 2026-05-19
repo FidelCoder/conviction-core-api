@@ -45,6 +45,12 @@ enum TradeSignalStatus {
   EXPIRED
 }
 
+enum TradeSignalSource {
+  TELEGRAM
+  FARCASTER
+  WEB
+}
+
 enum CopyTradeStatus {
   REQUESTED
   EXECUTED
@@ -153,6 +159,9 @@ model TradeSignal {
   marketId        String
   roomId          String?
   side            TradeSignalSide
+  thesis          String
+  convictionLevel Int?
+  source          TradeSignalSource
   limitPrice      Decimal?          @db.Decimal(18, 8)
   quantity        Decimal?          @db.Decimal(18, 8)
   rationale       String?
@@ -169,6 +178,8 @@ model TradeSignal {
   @@index([marketId])
   @@index([roomId])
   @@index([status])
+  @@index([source])
+  @@index([createdAt])
 }
 
 model CopyTrade {

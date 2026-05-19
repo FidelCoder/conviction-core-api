@@ -4,6 +4,7 @@ import { env } from "./config/index.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerMarketRoutes } from "./routes/markets.js";
+import { registerSignalRoutes } from "./routes/signals.js";
 
 export async function buildApp() {
   const app = fastify({
@@ -15,6 +16,7 @@ export async function buildApp() {
   registerErrorHandler(app);
   await registerHealthRoutes(app);
   await registerMarketRoutes(app);
+  await registerSignalRoutes(app);
 
   return app;
 }
