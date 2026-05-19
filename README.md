@@ -51,6 +51,12 @@ npm run db:deploy
 - `GET /signals/:id` returns one trade signal.
 - `GET /markets/:marketId/signals` returns signals for one market.
 - `GET /trader-profiles/:traderProfileId/signals` returns signals from one trader profile.
+- `POST /positions` creates a pending execution position intent for an existing user and market.
+- `GET /positions/:id` returns one position intent.
+- `GET /users/:userId/positions` returns positions for one user.
+- `GET /trader-profiles/:traderProfileId/positions` returns positions for the user behind one trader profile.
+- `POST /copy-trades` creates a pending execution copy intent against an existing source position.
+- `GET /positions/:positionId/copy-trades` returns copy intents for one source position.
 
 ## Market Data
 
@@ -96,6 +102,48 @@ Read signals:
 curl http://localhost:3000/signals/:id
 curl http://localhost:3000/markets/:marketId/signals
 curl http://localhost:3000/trader-profiles/:traderProfileId/signals
+```
+
+## Positions and Copy Intents
+
+Positions and copy records are intent records until a real execution adapter is added. New records are created with `PENDING_EXECUTION`. They must not be marked `EXECUTED` unless a real adapter confirms execution. Failed or cancelled attempts can use `FAILED` or `CANCELLED` once execution handling exists.
+
+Execution fields such as `averageEntryPrice`, `executedQuantity`, `executionPrice`, `resultingPositionId`, and `openedAt` stay `null` when there is no confirmed execution. The API does not calculate PnL.
+
+When a synced market has real price fields, the API stores an `observedMarketPrice` snapshot from the market record at intent creation time. If no real market price is available, `observedMarketPrice`, `observedMarketPriceSource`, and `observedMarketPriceAt` are returned as `null`.
+
+Create a position intent:
+
+```sh
+curl -X POST http://localhost:3000/positions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "existing-user-id",
+    "marketId": "existing-market-id",
+    "side": "YES",
+    "quantity": "10.00000000"
+  }'
+```
+
+Create a copy intent:
+
+```sh
+curl -X POST http://localhost:3000/copy-trades \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "followerId": "existing-user-id",
+    "sourcePositionId": "existing-source-position-id",
+    "requestedQuantity": "5.00000000"
+  }'
+```
+
+Read positions and copy intents:
+
+```sh
+curl http://localhost:3000/positions/:id
+curl http://localhost:3000/users/:userId/positions
+curl http://localhost:3000/trader-profiles/:traderProfileId/positions
+curl http://localhost:3000/positions/:positionId/copy-trades
 ```
 
 ## Structure

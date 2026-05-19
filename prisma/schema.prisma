@@ -30,8 +30,10 @@ enum PositionSide {
 }
 
 enum PositionStatus {
-  OPEN
-  CLOSED
+  PENDING_EXECUTION
+  EXECUTED
+  FAILED
+  CANCELLED
 }
 
 enum TradeSignalSide {
@@ -52,7 +54,7 @@ enum TradeSignalSource {
 }
 
 enum CopyTradeStatus {
-  REQUESTED
+  PENDING_EXECUTION
   EXECUTED
   FAILED
   CANCELLED
@@ -133,20 +135,24 @@ model Market {
 }
 
 model Position {
-  id                String         @id @default(cuid())
-  userId            String
-  marketId          String
-  side              PositionSide
-  quantity          Decimal        @db.Decimal(18, 8)
-  averageEntryPrice Decimal        @db.Decimal(18, 8)
-  status            PositionStatus @default(OPEN)
-  openedAt          DateTime       @default(now())
-  closedAt          DateTime?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  market            Market         @relation(fields: [marketId], references: [id], onDelete: Restrict)
-  sourceCopyTrade   CopyTrade?
+  id                        String         @id @default(cuid())
+  userId                    String
+  marketId                  String
+  side                      PositionSide
+  quantity                  Decimal        @db.Decimal(18, 8)
+  averageEntryPrice         Decimal?       @db.Decimal(18, 8)
+  observedMarketPrice       Decimal?       @db.Decimal(18, 8)
+  observedMarketPriceSource String?
+  observedMarketPriceAt     DateTime?
+  status                    PositionStatus @default(PENDING_EXECUTION)
+  openedAt                  DateTime?
+  closedAt                  DateTime?
+  createdAt                 DateTime       @default(now())
+  updatedAt                 DateTime       @updatedAt
+  user                      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  market                    Market         @relation(fields: [marketId], references: [id], onDelete: Restrict)
+  sourceCopyIntents         CopyTrade[]    @relation("CopyTradeSourcePosition")
+  resultingCopyTrade        CopyTrade?     @relation("CopyTradeResultingPosition")
 
   @@index([userId])
   @@index([marketId])
@@ -183,23 +189,29 @@ model TradeSignal {
 }
 
 model CopyTrade {
-  id                  String          @id @default(cuid())
-  followerId          String
-  sourceSignalId      String
-  requestedQuantity   Decimal         @db.Decimal(18, 8)
-  executedQuantity    Decimal?        @db.Decimal(18, 8)
-  executionPrice      Decimal?        @db.Decimal(18, 8)
-  resultingPositionId String?         @unique
-  status              CopyTradeStatus @default(REQUESTED)
-  externalOrderId     String?
-  errorMessage        String?
-  createdAt           DateTime        @default(now())
-  updatedAt           DateTime        @updatedAt
-  follower            User            @relation("CopyTradeFollower", fields: [followerId], references: [id], onDelete: Cascade)
-  sourceSignal        TradeSignal     @relation(fields: [sourceSignalId], references: [id], onDelete: Restrict)
-  resultingPosition   Position?       @relation(fields: [resultingPositionId], references: [id], onDelete: SetNull)
+  id                        String          @id @default(cuid())
+  followerId                String
+  sourcePositionId          String
+  sourceSignalId            String?
+  requestedQuantity         Decimal         @db.Decimal(18, 8)
+  executedQuantity          Decimal?        @db.Decimal(18, 8)
+  executionPrice            Decimal?        @db.Decimal(18, 8)
+  observedMarketPrice       Decimal?        @db.Decimal(18, 8)
+  observedMarketPriceSource String?
+  observedMarketPriceAt     DateTime?
+  resultingPositionId       String?         @unique
+  status                    CopyTradeStatus @default(PENDING_EXECUTION)
+  externalOrderId           String?
+  errorMessage              String?
+  createdAt                 DateTime        @default(now())
+  updatedAt                 DateTime        @updatedAt
+  follower                  User            @relation("CopyTradeFollower", fields: [followerId], references: [id], onDelete: Cascade)
+  sourcePosition            Position        @relation("CopyTradeSourcePosition", fields: [sourcePositionId], references: [id], onDelete: Restrict)
+  sourceSignal              TradeSignal?    @relation(fields: [sourceSignalId], references: [id], onDelete: SetNull)
+  resultingPosition         Position?       @relation("CopyTradeResultingPosition", fields: [resultingPositionId], references: [id], onDelete: SetNull)
 
   @@index([followerId])
+  @@index([sourcePositionId])
   @@index([sourceSignalId])
   @@index([status])
 }
