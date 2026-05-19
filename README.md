@@ -44,6 +44,12 @@ npm run db:deploy
 ## HTTP
 
 - `GET /health` returns API health status.
+- `GET /markets` returns persisted market records. Until a real provider integration is added, this returns an empty list when no markets have been synced.
+- `GET /markets/:id` returns one persisted market record by internal market id.
+
+## Market Data
+
+Market data must come from real provider integrations. This service includes the provider interface and database fields needed to sync external markets, but it does not include fake markets, demo markets, or hardcoded trading data. Provider implementations can be added later behind the `MarketProvider` interface.
 
 ## Structure
 

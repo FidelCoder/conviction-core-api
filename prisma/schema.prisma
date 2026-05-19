@@ -12,6 +12,11 @@ enum SocialPlatform {
   FARCASTER
 }
 
+enum MarketSource {
+  POLYMARKET
+  KALSHI
+}
+
 enum MarketStatus {
   ACTIVE
   CLOSED
@@ -86,21 +91,26 @@ model TraderProfile {
 }
 
 model Market {
-  id          String        @id @default(cuid())
-  provider    String
-  externalId  String
-  title       String
-  description String?
-  status      MarketStatus  @default(ACTIVE)
-  closesAt    DateTime?
-  resolvedAt  DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  positions   Position[]
-  signals     TradeSignal[]
+  id               String        @id @default(cuid())
+  externalMarketId String
+  source           MarketSource
+  title            String
+  description      String?
+  category         String?
+  status           MarketStatus  @default(ACTIVE)
+  resolutionDate   DateTime?
+  externalUrl      String?
+  yesTokenId       String?
+  noTokenId        String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  positions        Position[]
+  signals          TradeSignal[]
 
-  @@unique([provider, externalId])
+  @@unique([source, externalMarketId])
+  @@index([source])
   @@index([status])
+  @@index([category])
 }
 
 model Position {
