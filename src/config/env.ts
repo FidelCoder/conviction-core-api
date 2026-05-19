@@ -8,6 +8,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   DATABASE_URL: z.string().url(),
+  POLYMARKET_GAMMA_API_URL: z.string().url().default("https://gamma-api.polymarket.com"),
+  POLYMARKET_MARKETS_SYNC_LIMIT: z.coerce.number().int().positive().max(500).default(50),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -24,4 +26,6 @@ export const env = {
   port: parsedEnv.data.PORT,
   logLevel: parsedEnv.data.LOG_LEVEL,
   databaseUrl: parsedEnv.data.DATABASE_URL,
+  polymarketGammaApiUrl: parsedEnv.data.POLYMARKET_GAMMA_API_URL,
+  polymarketMarketsSyncLimit: parsedEnv.data.POLYMARKET_MARKETS_SYNC_LIMIT,
 };
