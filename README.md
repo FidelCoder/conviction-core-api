@@ -45,6 +45,9 @@ npm run db:deploy
 ## HTTP
 
 - `GET /health` returns API health status.
+- `POST /social-accounts` creates or fetches a real user from a Telegram or Farcaster identity.
+- `POST /trader-profiles` creates or updates a trader profile for a real user.
+- `GET /trader-profiles/:id` returns one trader profile.
 - `GET /markets` returns persisted market records. Until a real provider integration is added, this returns an empty list when no markets have been synced.
 - `GET /markets/:id` returns one persisted market record by internal market id.
 - `POST /signals` creates a trade signal against an existing trader profile and synced market.
@@ -166,6 +169,115 @@ Read stats:
 curl http://localhost:3000/leaderboard
 curl http://localhost:3000/trader-profiles/:id/stats
 ```
+
+## Demo Readiness
+
+This demo flow uses real local records created through the API. Replace every placeholder with a real local operator value. Do not seed fake users, fake traders, fake markets, fake positions, or fake trade history.
+
+Start PostgreSQL, apply migrations, and run the API:
+
+```sh
+npm install
+cp .env.example .env
+npm run db:generate
+npm run db:deploy
+npm run dev
+```
+
+Sync real markets from Polymarket. If the provider is unavailable, stop here and keep the market empty state visible.
+
+```sh
+npm run markets:sync:polymarket -- --limit=10
+curl http://localhost:3000/markets
+```
+
+Create or fetch a real Telegram user record. Use your own Telegram numeric ID and username, or run `/start` in the Telegram bot once it points at this API.
+
+```sh
+curl -X POST http://localhost:3000/social-accounts \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "platform": "TELEGRAM",
+    "platformUserId": "<your-real-telegram-user-id>",
+    "username": "<your-real-telegram-username>",
+    "displayName": "<your-real-display-name>",
+    "profileUrl": "https://t.me/<your-real-telegram-username>"
+  }'
+```
+
+Create or update a trader profile for that real user. Use the returned `user.id` from the previous response.
+
+```sh
+curl -X POST http://localhost:3000/trader-profiles \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "<real-user-id>",
+    "handle": "<real-trader-handle>",
+    "bio": "Local demo profile for a real operator."
+  }'
+```
+
+Create a signal against a synced market. Use a real `market.id` from `GET /markets` and the real `traderProfile.id` from the previous response.
+
+```sh
+curl -X POST http://localhost:3000/signals \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "traderProfileId": "<real-trader-profile-id>",
+    "marketId": "<real-synced-market-id>",
+    "side": "YES",
+    "thesis": "My real thesis for this market.",
+    "convictionLevel": 75,
+    "source": "WEB"
+  }'
+```
+
+Create a pending position intent from real user input. This is not execution and does not create PnL.
+
+```sh
+curl -X POST http://localhost:3000/positions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "<real-user-id>",
+    "marketId": "<real-synced-market-id>",
+    "side": "YES",
+    "quantity": "10.00000000"
+  }'
+```
+
+Create a second real user, then submit a copy intent against the source position. The response should remain `PENDING_EXECUTION` until a real execution adapter exists.
+
+```sh
+curl -X POST http://localhost:3000/copy-trades \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "followerId": "<real-follower-user-id>",
+    "sourcePositionId": "<real-source-position-id>",
+    "requestedQuantity": "5.00000000"
+  }'
+```
+
+Check the demo read endpoints:
+
+```sh
+curl http://localhost:3000/health
+curl http://localhost:3000/leaderboard
+curl http://localhost:3000/trader-profiles/<real-trader-profile-id>/stats
+curl http://localhost:3000/positions/<real-source-position-id>/copy-trades
+```
+
+Demo script:
+
+1. Run core API on `http://localhost:3000`.
+2. Sync real Polymarket markets or show the empty market state if sync is unavailable.
+3. Start Telegram with `CORE_API_URL=http://localhost:3000`.
+4. Start Farcaster/web with the same `CORE_API_URL=http://localhost:3000`.
+5. Create or fetch a real Telegram user through `/start` or `POST /social-accounts`.
+6. Create a real trader profile for that user.
+7. Create a trade signal against a real synced market.
+8. Open the Farcaster signal page and share the Mini App card.
+9. Submit a copy intent from another real user.
+10. Confirm leaderboard and stats update only from the recorded signal/copy-intent rows.
 
 ## Structure
 
