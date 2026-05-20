@@ -57,6 +57,8 @@ npm run db:deploy
 - `GET /trader-profiles/:traderProfileId/positions` returns positions for the user behind one trader profile.
 - `POST /copy-trades` creates a pending execution copy intent against an existing source position.
 - `GET /positions/:positionId/copy-trades` returns copy intents for one source position.
+- `GET /leaderboard` returns trader stats calculated from real database records.
+- `GET /trader-profiles/:id/stats` returns stats for one trader profile.
 
 ## Market Data
 
@@ -144,6 +146,25 @@ curl http://localhost:3000/positions/:id
 curl http://localhost:3000/users/:userId/positions
 curl http://localhost:3000/trader-profiles/:traderProfileId/positions
 curl http://localhost:3000/positions/:positionId/copy-trades
+```
+
+## Real Stats and Leaderboard
+
+Stats are calculated from persisted records only:
+
+- `numberOfSignals` counts real `TradeSignal` rows for a trader profile.
+- `numberOfCopyIntents` counts real `CopyTrade` rows submitted against positions owned by the trader profile's user.
+- `copiedVolume` sums `requestedQuantity` from those submitted copy intents.
+- `executedCopiedVolume` sums `executedQuantity` only for copy intents with `EXECUTED` status; it returns `null` when there are no executed copy intents.
+- `realizedPnl` returns `null` until real execution and close data exists in the database.
+
+The leaderboard does not invent win rate, PnL, trader performance, or copied volume. Entries are sorted by real copy intent count, copied volume, then signal count.
+
+Read stats:
+
+```sh
+curl http://localhost:3000/leaderboard
+curl http://localhost:3000/trader-profiles/:id/stats
 ```
 
 ## Structure
