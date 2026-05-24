@@ -7,6 +7,7 @@ import { registerMarketRoutes } from "./routes/markets.js";
 import { registerPositionRoutes } from "./routes/positions.js";
 import { registerSignalRoutes } from "./routes/signals.js";
 import { registerStatsRoutes } from "./routes/stats.js";
+import { registerUserRoutes } from "./routes/users.js";
 
 export async function buildApp() {
   const app = fastify({
@@ -17,6 +18,7 @@ export async function buildApp() {
 
   registerErrorHandler(app);
   await registerHealthRoutes(app);
+  await registerUserRoutes(app);
   await registerMarketRoutes(app);
   await registerSignalRoutes(app);
   await registerPositionRoutes(app);
