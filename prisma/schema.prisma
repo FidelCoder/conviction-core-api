@@ -65,6 +65,20 @@ enum ExecutionMode {
   MARGIN
 }
 
+enum ExecutionAttemptStatus {
+  CREATED
+  BLOCKED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
+enum ExecutionAttemptTarget {
+  POSITION
+  COPY_TRADE
+}
+
 model User {
   id             String          @id @default(cuid())
   displayName    String?
@@ -163,6 +177,7 @@ model Position {
   updatedAt                 DateTime       @updatedAt
   user                      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   market                    Market         @relation(fields: [marketId], references: [id], onDelete: Restrict)
+  executionAttempts         ExecutionAttempt[]
   sourceCopyIntents         CopyTrade[]    @relation("CopyTradeSourcePosition")
   resultingCopyTrade        CopyTrade?     @relation("CopyTradeResultingPosition")
 
@@ -231,6 +246,7 @@ model CopyTrade {
   sourcePosition            Position        @relation("CopyTradeSourcePosition", fields: [sourcePositionId], references: [id], onDelete: Restrict)
   sourceSignal              TradeSignal?    @relation(fields: [sourceSignalId], references: [id], onDelete: SetNull)
   resultingPosition         Position?       @relation("CopyTradeResultingPosition", fields: [resultingPositionId], references: [id], onDelete: SetNull)
+  executionAttempts         ExecutionAttempt[]
 
   @@unique([followerId, idempotencyKey])
   @@index([followerId])
@@ -239,6 +255,39 @@ model CopyTrade {
   @@index([status])
   @@index([chainId])
   @@index([executionMode])
+}
+
+model ExecutionAttempt {
+  id                   String                 @id @default(cuid())
+  targetType           ExecutionAttemptTarget
+  positionId           String?
+  copyTradeId          String?
+  adapterId            String
+  executionMode        ExecutionMode
+  chainId              Int?
+  walletAddress        String?
+  requestedQuantity    Decimal?               @db.Decimal(18, 8)
+  leverageMultiplier   Decimal?               @db.Decimal(10, 4)
+  observedMarketPrice  Decimal?               @db.Decimal(18, 8)
+  status               ExecutionAttemptStatus @default(CREATED)
+  failureCode          String?
+  failureMessage       String?
+  externalOrderId      String?
+  chainTransactionHash String?
+  requestPayload       Json?
+  responsePayload      Json?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  position             Position?              @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  copyTrade            CopyTrade?             @relation(fields: [copyTradeId], references: [id], onDelete: Cascade)
+
+  @@index([targetType])
+  @@index([positionId])
+  @@index([copyTradeId])
+  @@index([adapterId])
+  @@index([status])
+  @@index([chainId])
+  @@index([createdAt])
 }
 
 model TradingRoom {

@@ -48,7 +48,12 @@ npm run db:deploy
 - `POST /social-accounts` creates or fetches a real user from a Telegram or Farcaster identity.
 - `POST /trader-profiles` creates or updates a trader profile for a real user.
 - `GET /trader-profiles/:id` returns one trader profile.
-- `GET /execution/capabilities` returns the current EVM execution capability map. Spot and margin execution are disabled until real adapters/contracts exist.
+- `GET /execution/capabilities` returns the current EVM execution capability map. Margin intents are accepted, but spot and margin execution stay disabled until real adapters/contracts exist.
+- `POST /execution/positions/:positionId/start` records an execution attempt for a pending position intent.
+- `POST /execution/copy-trades/:copyTradeId/start` records an execution attempt for a pending copy intent.
+- `GET /execution/attempts/:id` returns one execution attempt.
+- `GET /positions/:positionId/execution-attempts` returns position execution attempts.
+- `GET /copy-trades/:copyTradeId/execution-attempts` returns copy-intent execution attempts.
 - `GET /markets` returns persisted market records. Until a real provider integration is added, this returns an empty list when no markets have been synced.
 - `GET /markets/:id` returns one persisted market record by internal market id.
 - `POST /signals` creates a trade signal against an existing trader profile and synced market.
@@ -112,17 +117,28 @@ curl http://localhost:3000/trader-profiles/:traderProfileId/signals
 
 ## Multichain EVM Execution Foundation
 
-Conviction Markets is intent-first. Farcaster and Telegram can create real signal, position, and copy-intent records, but execution remains pending until a real venue adapter or contract confirms execution.
+Conviction Markets is intent-first. Farcaster and Telegram can create real signal, position, copy-intent, and margin-intent records, but execution remains pending until a real venue adapter or contract confirms execution.
 
-The current execution foundation is EVM-only and multichain-aware. Position and copy-intent records can carry optional execution metadata:
+The current execution foundation is EVM-only and multichain-aware. Position and copy-intent records can carry execution metadata:
 
-- `chainId` for the intended EVM chain.
-- `walletAddress` for the user-controlled wallet that will sign or own execution.
-- `executionMode` with `SPOT` supported as an intent mode and `MARGIN` rejected until contracts exist.
-- `leverageMultiplier`, accepted only as `1` for now. Values above `1` return `LEVERAGE_EXECUTION_NOT_ENABLED`.
+- `chainId` for the intended EVM chain. Margin intents require it.
+- `walletAddress` for the user-controlled wallet that will sign or own execution. Margin intents require it.
+- `executionMode` with `SPOT` and `MARGIN` accepted as intent modes.
+- `leverageMultiplier`; spot intents must use `1` or omit it, while margin intents must be greater than `1` and no higher than `EXECUTION_MARGIN_MAX_LEVERAGE`.
 - `executionAdapterId` for future adapters such as a venue/CLOB adapter.
 - `chainTransactionHash`, which stays `null` until an adapter confirms a real transaction.
 - `idempotencyKey` to help clients avoid duplicate submitted intents.
+
+Execution attempt records are audit records. Calling a start endpoint creates an `ExecutionAttempt`. If no real adapter/contracts are active, the attempt is stored as `BLOCKED` with a clear reason and the source position/copy-intent remains `PENDING_EXECUTION`. The API does not mark anything `EXECUTED` from a placeholder adapter.
+
+Configure execution switches in `.env`. Defaults are intentionally off:
+
+```sh
+EXECUTION_SPOT_ENABLED=false
+EXECUTION_MARGIN_ENABLED=false
+EXECUTION_ACTIVE_ADAPTERS=
+EXECUTION_MARGIN_MAX_LEVERAGE=10
+```
 
 Check capabilities:
 
@@ -148,7 +164,32 @@ curl -X POST http://localhost:3000/positions \
   }'
 ```
 
-Leveraged probability trading should be added later as an Ultramarkets-style margin layer: vault contracts, risk rules, liquidation/auto-close rules, and venue adapters. Do not build synthetic leveraged fills in the API or clients.
+Create a margin position intent. This records a real requested margin trade, but it remains pending until contracts/adapters exist:
+
+```sh
+curl -X POST http://localhost:3000/positions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "existing-user-id",
+    "marketId": "existing-market-id",
+    "side": "YES",
+    "quantity": "10.00000000",
+    "chainId": 8453,
+    "walletAddress": "0x0000000000000000000000000000000000000000",
+    "executionMode": "MARGIN",
+    "leverageMultiplier": "3",
+    "idempotencyKey": "client-generated-margin-key"
+  }'
+```
+
+Start execution recording for a pending intent:
+
+```sh
+curl -X POST http://localhost:3000/execution/positions/:positionId/start
+curl http://localhost:3000/positions/:positionId/execution-attempts
+```
+
+Leveraged probability trading follows the margin-layer path: vault contracts, risk rules, liquidation/auto-close rules, and venue adapters. Do not build synthetic leveraged fills in the API or clients.
 
 ## Positions and Copy Intents
 
