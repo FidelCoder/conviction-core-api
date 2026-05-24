@@ -1,4 +1,4 @@
-import { PositionSide } from "@prisma/client";
+import { ExecutionMode, PositionSide } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 
 import { AppError } from "../lib/errors.js";
@@ -28,14 +28,24 @@ type PositionCopyTradesParams = {
   positionId: string;
 };
 
-type CreatePositionBody = {
+type ExecutionIntentBody = {
+  chainId?: number | null;
+  walletAddress?: string | null;
+  executionMode?: ExecutionMode | null;
+  leverageMultiplier?: string | null;
+  marginCollateral?: string | null;
+  executionAdapterId?: string | null;
+  idempotencyKey?: string | null;
+};
+
+type CreatePositionBody = ExecutionIntentBody & {
   userId: string;
   marketId: string;
   side: PositionSide;
   quantity: string;
 };
 
-type CreateCopyTradeBody = {
+type CreateCopyTradeBody = ExecutionIntentBody & {
   followerId: string;
   sourcePositionId: string;
   requestedQuantity: string;
@@ -43,11 +53,27 @@ type CreateCopyTradeBody = {
 };
 
 const positionSideValues = Object.values(PositionSide);
+const executionModeValues = Object.values(ExecutionMode);
 const decimalStringSchema = {
   type: "string",
   minLength: 1,
   maxLength: 40,
   pattern: "^(?:0|[1-9]\\d*)(?:\\.\\d{1,8})?$",
+};
+const leverageStringSchema = {
+  type: "string",
+  minLength: 1,
+  maxLength: 24,
+  pattern: "^(?:0|[1-9]\\d*)(?:\\.\\d{1,4})?$",
+};
+const executionIntentSchema = {
+  chainId: { type: "integer", minimum: 1, nullable: true },
+  walletAddress: { type: "string", minLength: 42, maxLength: 42, nullable: true },
+  executionMode: { type: "string", enum: executionModeValues, nullable: true },
+  leverageMultiplier: { ...leverageStringSchema, nullable: true },
+  marginCollateral: { ...decimalStringSchema, nullable: true },
+  executionAdapterId: { type: "string", minLength: 1, maxLength: 80, nullable: true },
+  idempotencyKey: { type: "string", minLength: 1, maxLength: 128, nullable: true },
 };
 
 export async function registerPositionRoutes(app: FastifyInstance) {
@@ -64,6 +90,7 @@ export async function registerPositionRoutes(app: FastifyInstance) {
             marketId: { type: "string", minLength: 1 },
             side: { type: "string", enum: positionSideValues },
             quantity: decimalStringSchema,
+            ...executionIntentSchema,
           },
         },
       },
@@ -137,6 +164,7 @@ export async function registerPositionRoutes(app: FastifyInstance) {
             sourcePositionId: { type: "string", minLength: 1 },
             sourceSignalId: { type: "string", minLength: 1, nullable: true },
             requestedQuantity: decimalStringSchema,
+            ...executionIntentSchema,
           },
         },
       },
