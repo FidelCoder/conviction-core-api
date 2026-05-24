@@ -1,8 +1,15 @@
 import type { CopyTrade, Market, Position } from "@prisma/client";
-import { CopyTradeStatus, PositionSide, PositionStatus, Prisma } from "@prisma/client";
+import {
+  CopyTradeStatus,
+  ExecutionMode,
+  PositionSide,
+  PositionStatus,
+  Prisma,
+} from "@prisma/client";
 
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import { buildExecutionIntentMetadata, type ExecutionIntentInput } from "./execution.js";
 
 const decimalInputPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/;
 
@@ -11,14 +18,14 @@ type MarketPriceSnapshot = Pick<
   "lastTradePrice" | "bestAsk" | "bestBid" | "syncedAt" | "updatedAt"
 >;
 
-export type CreatePositionInput = {
+export type CreatePositionInput = ExecutionIntentInput & {
   userId: string;
   marketId: string;
   side: PositionSide;
   quantity: string;
 };
 
-export type CreateCopyTradeInput = {
+export type CreateCopyTradeInput = ExecutionIntentInput & {
   followerId: string;
   sourcePositionId: string;
   requestedQuantity: string;
@@ -35,6 +42,13 @@ export type NormalizedPosition = {
   observedMarketPrice: string | null;
   observedMarketPriceSource: string | null;
   observedMarketPriceAt: string | null;
+  chainId: number | null;
+  walletAddress: string | null;
+  executionMode: ExecutionMode;
+  leverageMultiplier: string | null;
+  executionAdapterId: string | null;
+  chainTransactionHash: string | null;
+  idempotencyKey: string | null;
   status: Position["status"];
   openedAt: string | null;
   closedAt: string | null;
@@ -53,6 +67,13 @@ export type NormalizedCopyTrade = {
   observedMarketPrice: string | null;
   observedMarketPriceSource: string | null;
   observedMarketPriceAt: string | null;
+  chainId: number | null;
+  walletAddress: string | null;
+  executionMode: ExecutionMode;
+  leverageMultiplier: string | null;
+  executionAdapterId: string | null;
+  chainTransactionHash: string | null;
+  idempotencyKey: string | null;
   resultingPositionId: string | null;
   status: CopyTrade["status"];
   externalOrderId: string | null;
@@ -83,6 +104,7 @@ export async function createPosition(input: CreatePositionInput) {
   }
 
   const observedPrice = getObservedMarketPrice(market);
+  const executionMetadata = buildExecutionIntentMetadata(input);
   const position = await prisma.position.create({
     data: {
       userId: input.userId,
@@ -93,6 +115,7 @@ export async function createPosition(input: CreatePositionInput) {
       observedMarketPrice: observedPrice.price,
       observedMarketPriceSource: observedPrice.source,
       observedMarketPriceAt: observedPrice.observedAt,
+      ...executionMetadata,
       status: PositionStatus.PENDING_EXECUTION,
       openedAt: null,
     },
@@ -196,6 +219,7 @@ export async function createCopyTrade(input: CreateCopyTradeInput) {
   }
 
   const observedPrice = getObservedMarketPrice(sourcePosition.market);
+  const executionMetadata = buildExecutionIntentMetadata(input);
   const copyTrade = await prisma.copyTrade.create({
     data: {
       followerId: input.followerId,
@@ -207,6 +231,7 @@ export async function createCopyTrade(input: CreateCopyTradeInput) {
       observedMarketPrice: observedPrice.price,
       observedMarketPriceSource: observedPrice.source,
       observedMarketPriceAt: observedPrice.observedAt,
+      ...executionMetadata,
       resultingPositionId: null,
       status: CopyTradeStatus.PENDING_EXECUTION,
     },
@@ -244,6 +269,13 @@ export function normalizePosition(position: Position): NormalizedPosition {
     observedMarketPrice: position.observedMarketPrice?.toString() ?? null,
     observedMarketPriceSource: position.observedMarketPriceSource,
     observedMarketPriceAt: position.observedMarketPriceAt?.toISOString() ?? null,
+    chainId: position.chainId,
+    walletAddress: position.walletAddress,
+    executionMode: position.executionMode,
+    leverageMultiplier: position.leverageMultiplier?.toString() ?? null,
+    executionAdapterId: position.executionAdapterId,
+    chainTransactionHash: position.chainTransactionHash,
+    idempotencyKey: position.idempotencyKey,
     status: position.status,
     openedAt: position.openedAt?.toISOString() ?? null,
     closedAt: position.closedAt?.toISOString() ?? null,
@@ -264,6 +296,13 @@ export function normalizeCopyTrade(copyTrade: CopyTrade): NormalizedCopyTrade {
     observedMarketPrice: copyTrade.observedMarketPrice?.toString() ?? null,
     observedMarketPriceSource: copyTrade.observedMarketPriceSource,
     observedMarketPriceAt: copyTrade.observedMarketPriceAt?.toISOString() ?? null,
+    chainId: copyTrade.chainId,
+    walletAddress: copyTrade.walletAddress,
+    executionMode: copyTrade.executionMode,
+    leverageMultiplier: copyTrade.leverageMultiplier?.toString() ?? null,
+    executionAdapterId: copyTrade.executionAdapterId,
+    chainTransactionHash: copyTrade.chainTransactionHash,
+    idempotencyKey: copyTrade.idempotencyKey,
     resultingPositionId: copyTrade.resultingPositionId,
     status: copyTrade.status,
     externalOrderId: copyTrade.externalOrderId,

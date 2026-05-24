@@ -60,6 +60,11 @@ enum CopyTradeStatus {
   CANCELLED
 }
 
+enum ExecutionMode {
+  SPOT
+  MARGIN
+}
+
 model User {
   id             String          @id @default(cuid())
   displayName    String?
@@ -144,6 +149,13 @@ model Position {
   observedMarketPrice       Decimal?       @db.Decimal(18, 8)
   observedMarketPriceSource String?
   observedMarketPriceAt     DateTime?
+  chainId                   Int?
+  walletAddress             String?
+  executionMode             ExecutionMode  @default(SPOT)
+  leverageMultiplier        Decimal?       @db.Decimal(10, 4)
+  executionAdapterId        String?
+  chainTransactionHash      String?
+  idempotencyKey            String?
   status                    PositionStatus @default(PENDING_EXECUTION)
   openedAt                  DateTime?
   closedAt                  DateTime?
@@ -154,9 +166,12 @@ model Position {
   sourceCopyIntents         CopyTrade[]    @relation("CopyTradeSourcePosition")
   resultingCopyTrade        CopyTrade?     @relation("CopyTradeResultingPosition")
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
   @@index([marketId])
   @@index([status])
+  @@index([chainId])
+  @@index([executionMode])
 }
 
 model TradeSignal {
@@ -199,6 +214,13 @@ model CopyTrade {
   observedMarketPrice       Decimal?        @db.Decimal(18, 8)
   observedMarketPriceSource String?
   observedMarketPriceAt     DateTime?
+  chainId                   Int?
+  walletAddress             String?
+  executionMode             ExecutionMode   @default(SPOT)
+  leverageMultiplier        Decimal?        @db.Decimal(10, 4)
+  executionAdapterId        String?
+  chainTransactionHash      String?
+  idempotencyKey            String?
   resultingPositionId       String?         @unique
   status                    CopyTradeStatus @default(PENDING_EXECUTION)
   externalOrderId           String?
@@ -210,10 +232,13 @@ model CopyTrade {
   sourceSignal              TradeSignal?    @relation(fields: [sourceSignalId], references: [id], onDelete: SetNull)
   resultingPosition         Position?       @relation("CopyTradeResultingPosition", fields: [resultingPositionId], references: [id], onDelete: SetNull)
 
+  @@unique([followerId, idempotencyKey])
   @@index([followerId])
   @@index([sourcePositionId])
   @@index([sourceSignalId])
   @@index([status])
+  @@index([chainId])
+  @@index([executionMode])
 }
 
 model TradingRoom {

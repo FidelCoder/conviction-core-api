@@ -45,6 +45,7 @@ npm run db:deploy
 ## HTTP
 
 - `GET /health` returns API health status.
+- `GET /execution/capabilities` returns the current EVM execution capability map. Spot and margin execution are disabled until real adapters/contracts exist.
 - `GET /markets` returns persisted market records. Until a real provider integration is added, this returns an empty list when no markets have been synced.
 - `GET /markets/:id` returns one persisted market record by internal market id.
 - `POST /signals` creates a trade signal against an existing trader profile and synced market.
@@ -105,6 +106,46 @@ curl http://localhost:3000/signals/:id
 curl http://localhost:3000/markets/:marketId/signals
 curl http://localhost:3000/trader-profiles/:traderProfileId/signals
 ```
+
+## Multichain EVM Execution Foundation
+
+Conviction Markets is intent-first. Farcaster and Telegram can create real signal, position, and copy-intent records, but execution remains pending until a real venue adapter or contract confirms execution.
+
+The current execution foundation is EVM-only and multichain-aware. Position and copy-intent records can carry optional execution metadata:
+
+- `chainId` for the intended EVM chain.
+- `walletAddress` for the user-controlled wallet that will sign or own execution.
+- `executionMode` with `SPOT` supported as an intent mode and `MARGIN` rejected until contracts exist.
+- `leverageMultiplier`, accepted only as `1` for now. Values above `1` return `LEVERAGE_EXECUTION_NOT_ENABLED`.
+- `executionAdapterId` for future adapters such as a venue/CLOB adapter.
+- `chainTransactionHash`, which stays `null` until an adapter confirms a real transaction.
+- `idempotencyKey` to help clients avoid duplicate submitted intents.
+
+Check capabilities:
+
+```sh
+curl http://localhost:3000/execution/capabilities
+```
+
+Create a spot position intent with EVM metadata. This still does not execute a trade:
+
+```sh
+curl -X POST http://localhost:3000/positions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "existing-user-id",
+    "marketId": "existing-market-id",
+    "side": "YES",
+    "quantity": "10.00000000",
+    "chainId": 8453,
+    "walletAddress": "0x0000000000000000000000000000000000000000",
+    "executionMode": "SPOT",
+    "leverageMultiplier": "1",
+    "idempotencyKey": "client-generated-key"
+  }'
+```
+
+Leveraged probability trading should be added later as an Ultramarkets-style margin layer: vault contracts, risk rules, liquidation/auto-close rules, and venue adapters. Do not build synthetic leveraged fills in the API or clients.
 
 ## Positions and Copy Intents
 
