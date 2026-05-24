@@ -125,6 +125,7 @@ The current execution foundation is EVM-only and multichain-aware. Position and 
 - `walletAddress` for the user-controlled wallet that will sign or own execution. Margin intents require it.
 - `executionMode` with `SPOT` and `MARGIN` accepted as intent modes.
 - `leverageMultiplier`; spot intents must use `1` or omit it, while margin intents must be greater than `1` and no higher than `EXECUTION_MARGIN_MAX_LEVERAGE`.
+- `marginCollateral` for the user's real collateral amount on margin intents. The API derives `notionalAmount` and `borrowedAmount` from collateral and leverage.
 - `executionAdapterId` for future adapters such as a venue/CLOB adapter.
 - `chainTransactionHash`, which stays `null` until an adapter confirms a real transaction.
 - `idempotencyKey` to help clients avoid duplicate submitted intents.
@@ -178,6 +179,7 @@ curl -X POST http://localhost:3000/positions \
     "walletAddress": "0x0000000000000000000000000000000000000000",
     "executionMode": "MARGIN",
     "leverageMultiplier": "3",
+    "marginCollateral": "25.00000000",
     "idempotencyKey": "client-generated-margin-key"
   }'
 ```

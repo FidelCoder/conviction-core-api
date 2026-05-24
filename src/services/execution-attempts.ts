@@ -22,6 +22,9 @@ export type NormalizedExecutionAttempt = {
   walletAddress: string | null;
   requestedQuantity: string | null;
   leverageMultiplier: string | null;
+  marginCollateral: string | null;
+  notionalAmount: string | null;
+  borrowedAmount: string | null;
   observedMarketPrice: string | null;
   status: ExecutionAttempt["status"];
   failureCode: string | null;
@@ -62,6 +65,9 @@ export async function startPositionExecution(positionId: string) {
       walletAddress: position.walletAddress,
       requestedQuantity: position.quantity,
       leverageMultiplier: position.leverageMultiplier,
+      marginCollateral: position.marginCollateral,
+      notionalAmount: position.notionalAmount,
+      borrowedAmount: position.borrowedAmount,
       observedMarketPrice: position.observedMarketPrice,
       status: readiness.ready ? ExecutionAttemptStatus.CREATED : ExecutionAttemptStatus.BLOCKED,
       failureCode: readiness.ready ? null : readiness.code,
@@ -106,6 +112,9 @@ export async function startCopyTradeExecution(copyTradeId: string) {
       walletAddress: copyTrade.walletAddress,
       requestedQuantity: copyTrade.requestedQuantity,
       leverageMultiplier: copyTrade.leverageMultiplier,
+      marginCollateral: copyTrade.marginCollateral,
+      notionalAmount: copyTrade.notionalAmount,
+      borrowedAmount: copyTrade.borrowedAmount,
       observedMarketPrice: copyTrade.observedMarketPrice,
       status: readiness.ready ? ExecutionAttemptStatus.CREATED : ExecutionAttemptStatus.BLOCKED,
       failureCode: readiness.ready ? null : readiness.code,
@@ -182,6 +191,9 @@ export function normalizeExecutionAttempt(attempt: ExecutionAttempt): Normalized
     walletAddress: attempt.walletAddress,
     requestedQuantity: attempt.requestedQuantity?.toString() ?? null,
     leverageMultiplier: attempt.leverageMultiplier?.toString() ?? null,
+    marginCollateral: attempt.marginCollateral?.toString() ?? null,
+    notionalAmount: attempt.notionalAmount?.toString() ?? null,
+    borrowedAmount: attempt.borrowedAmount?.toString() ?? null,
     observedMarketPrice: attempt.observedMarketPrice?.toString() ?? null,
     status: attempt.status,
     failureCode: attempt.failureCode,
@@ -231,6 +243,9 @@ function buildPositionAttemptPayload(position: Position): Prisma.JsonObject {
     quantity: position.quantity.toString(),
     executionMode: position.executionMode,
     leverageMultiplier: position.leverageMultiplier?.toString() ?? null,
+    marginCollateral: position.marginCollateral?.toString() ?? null,
+    notionalAmount: position.notionalAmount?.toString() ?? null,
+    borrowedAmount: position.borrowedAmount?.toString() ?? null,
     chainId: position.chainId,
     walletAddress: position.walletAddress,
     observedMarketPrice: position.observedMarketPrice?.toString() ?? null,
@@ -249,6 +264,9 @@ function buildCopyTradeAttemptPayload(copyTrade: CopyTrade): Prisma.JsonObject {
     requestedQuantity: copyTrade.requestedQuantity.toString(),
     executionMode: copyTrade.executionMode,
     leverageMultiplier: copyTrade.leverageMultiplier?.toString() ?? null,
+    marginCollateral: copyTrade.marginCollateral?.toString() ?? null,
+    notionalAmount: copyTrade.notionalAmount?.toString() ?? null,
+    borrowedAmount: copyTrade.borrowedAmount?.toString() ?? null,
     chainId: copyTrade.chainId,
     walletAddress: copyTrade.walletAddress,
     observedMarketPrice: copyTrade.observedMarketPrice?.toString() ?? null,

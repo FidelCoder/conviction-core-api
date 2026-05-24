@@ -33,6 +33,7 @@ type ExecutionIntentBody = {
   walletAddress?: string | null;
   executionMode?: ExecutionMode | null;
   leverageMultiplier?: string | null;
+  marginCollateral?: string | null;
   executionAdapterId?: string | null;
   idempotencyKey?: string | null;
 };
@@ -70,6 +71,7 @@ const executionIntentSchema = {
   walletAddress: { type: "string", minLength: 42, maxLength: 42, nullable: true },
   executionMode: { type: "string", enum: executionModeValues, nullable: true },
   leverageMultiplier: { ...leverageStringSchema, nullable: true },
+  marginCollateral: { ...decimalStringSchema, nullable: true },
   executionAdapterId: { type: "string", minLength: 1, maxLength: 80, nullable: true },
   idempotencyKey: { type: "string", minLength: 1, maxLength: 128, nullable: true },
 };

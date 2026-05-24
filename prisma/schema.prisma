@@ -167,6 +167,9 @@ model Position {
   walletAddress             String?
   executionMode             ExecutionMode  @default(SPOT)
   leverageMultiplier        Decimal?       @db.Decimal(10, 4)
+  marginCollateral          Decimal?       @db.Decimal(18, 8)
+  notionalAmount            Decimal?       @db.Decimal(18, 8)
+  borrowedAmount            Decimal?       @db.Decimal(18, 8)
   executionAdapterId        String?
   chainTransactionHash      String?
   idempotencyKey            String?
@@ -233,6 +236,9 @@ model CopyTrade {
   walletAddress             String?
   executionMode             ExecutionMode   @default(SPOT)
   leverageMultiplier        Decimal?        @db.Decimal(10, 4)
+  marginCollateral          Decimal?        @db.Decimal(18, 8)
+  notionalAmount            Decimal?        @db.Decimal(18, 8)
+  borrowedAmount            Decimal?        @db.Decimal(18, 8)
   executionAdapterId        String?
   chainTransactionHash      String?
   idempotencyKey            String?
@@ -268,6 +274,9 @@ model ExecutionAttempt {
   walletAddress        String?
   requestedQuantity    Decimal?               @db.Decimal(18, 8)
   leverageMultiplier   Decimal?               @db.Decimal(10, 4)
+  marginCollateral     Decimal?               @db.Decimal(18, 8)
+  notionalAmount       Decimal?               @db.Decimal(18, 8)
+  borrowedAmount       Decimal?               @db.Decimal(18, 8)
   observedMarketPrice  Decimal?               @db.Decimal(18, 8)
   status               ExecutionAttemptStatus @default(CREATED)
   failureCode          String?

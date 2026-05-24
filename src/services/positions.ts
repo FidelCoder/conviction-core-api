@@ -46,6 +46,9 @@ export type NormalizedPosition = {
   walletAddress: string | null;
   executionMode: ExecutionMode;
   leverageMultiplier: string | null;
+  marginCollateral: string | null;
+  notionalAmount: string | null;
+  borrowedAmount: string | null;
   executionAdapterId: string | null;
   chainTransactionHash: string | null;
   idempotencyKey: string | null;
@@ -71,6 +74,9 @@ export type NormalizedCopyTrade = {
   walletAddress: string | null;
   executionMode: ExecutionMode;
   leverageMultiplier: string | null;
+  marginCollateral: string | null;
+  notionalAmount: string | null;
+  borrowedAmount: string | null;
   executionAdapterId: string | null;
   chainTransactionHash: string | null;
   idempotencyKey: string | null;
@@ -273,6 +279,9 @@ export function normalizePosition(position: Position): NormalizedPosition {
     walletAddress: position.walletAddress,
     executionMode: position.executionMode,
     leverageMultiplier: position.leverageMultiplier?.toString() ?? null,
+    marginCollateral: position.marginCollateral?.toString() ?? null,
+    notionalAmount: position.notionalAmount?.toString() ?? null,
+    borrowedAmount: position.borrowedAmount?.toString() ?? null,
     executionAdapterId: position.executionAdapterId,
     chainTransactionHash: position.chainTransactionHash,
     idempotencyKey: position.idempotencyKey,
@@ -300,6 +309,9 @@ export function normalizeCopyTrade(copyTrade: CopyTrade): NormalizedCopyTrade {
     walletAddress: copyTrade.walletAddress,
     executionMode: copyTrade.executionMode,
     leverageMultiplier: copyTrade.leverageMultiplier?.toString() ?? null,
+    marginCollateral: copyTrade.marginCollateral?.toString() ?? null,
+    notionalAmount: copyTrade.notionalAmount?.toString() ?? null,
+    borrowedAmount: copyTrade.borrowedAmount?.toString() ?? null,
     executionAdapterId: copyTrade.executionAdapterId,
     chainTransactionHash: copyTrade.chainTransactionHash,
     idempotencyKey: copyTrade.idempotencyKey,

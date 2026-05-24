@@ -4,7 +4,8 @@ import { env } from "../config/index.js";
 import { AppError } from "../lib/errors.js";
 
 const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
-const decimalInputPattern = /^(?:0|[1-9]d*)(?:.d{1,4})?$/;
+const leverageDecimalInputPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,4})?$/;
+const amountDecimalInputPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/;
 const defaultAdapterId = "unassigned";
 
 export type ExecutionIntentInput = {
@@ -12,6 +13,7 @@ export type ExecutionIntentInput = {
   walletAddress?: string | null;
   executionMode?: ExecutionMode | null;
   leverageMultiplier?: string | null;
+  marginCollateral?: string | null;
   executionAdapterId?: string | null;
   idempotencyKey?: string | null;
 };
@@ -21,6 +23,9 @@ export type ExecutionIntentMetadata = {
   walletAddress: string | null;
   executionMode: ExecutionMode;
   leverageMultiplier: Prisma.Decimal | null;
+  marginCollateral: Prisma.Decimal | null;
+  notionalAmount: Prisma.Decimal | null;
+  borrowedAmount: Prisma.Decimal | null;
   executionAdapterId: string | null;
   chainTransactionHash: null;
   idempotencyKey: string | null;
@@ -239,6 +244,7 @@ export function getExecutionReadiness(input: ExecutionReadinessInput): Execution
 export function buildExecutionIntentMetadata(input: ExecutionIntentInput): ExecutionIntentMetadata {
   const executionMode = input.executionMode ?? ExecutionMode.SPOT;
   const leverageMultiplier = parseLeverageMultiplier(input.leverageMultiplier);
+  const marginCollateral = parseMarginCollateral(input.marginCollateral);
   const chainId = normalizeChainId(input.chainId);
   const walletAddress = normalizeWalletAddress(input.walletAddress);
   const executionAdapterId = normalizeOptionalText(
@@ -260,18 +266,25 @@ export function buildExecutionIntentMetadata(input: ExecutionIntentInput): Execu
   }
 
   if (executionMode === ExecutionMode.SPOT) {
-    validateSpotIntent(leverageMultiplier);
+    validateSpotIntent({ leverageMultiplier, marginCollateral });
   }
 
   if (executionMode === ExecutionMode.MARGIN) {
-    validateMarginIntent({ chainId, walletAddress, leverageMultiplier });
+    validateMarginIntent({ chainId, walletAddress, leverageMultiplier, marginCollateral });
   }
+
+  const marginAmounts = buildMarginAmounts({
+    executionMode,
+    leverageMultiplier,
+    marginCollateral,
+  });
 
   return {
     chainId,
     walletAddress,
     executionMode,
     leverageMultiplier,
+    ...marginAmounts,
     executionAdapterId,
     chainTransactionHash: null,
     idempotencyKey,
@@ -284,14 +297,27 @@ function getActiveExecutionAdapters() {
   return implementedExecutionAdapters.filter((adapter) => activeAdapterIds.has(adapter.id));
 }
 
-function validateSpotIntent(leverageMultiplier: Prisma.Decimal | null) {
-  if (leverageMultiplier && !leverageMultiplier.equals(1)) {
+function validateSpotIntent(input: {
+  leverageMultiplier: Prisma.Decimal | null;
+  marginCollateral: Prisma.Decimal | null;
+}) {
+  if (input.leverageMultiplier && !input.leverageMultiplier.equals(1)) {
     throw new AppError("Spot intents cannot request leverage", {
       code: "SPOT_LEVERAGE_NOT_SUPPORTED",
       statusCode: 422,
       details: {
-        leverageMultiplier: leverageMultiplier.toString(),
+        leverageMultiplier: input.leverageMultiplier.toString(),
         recommendation: "Use executionMode=MARGIN for leverage intent records.",
+      },
+    });
+  }
+
+  if (input.marginCollateral) {
+    throw new AppError("Spot intents cannot include margin collateral", {
+      code: "SPOT_MARGIN_COLLATERAL_NOT_SUPPORTED",
+      statusCode: 422,
+      details: {
+        recommendation: "Use executionMode=MARGIN for collateral-backed margin intent records.",
       },
     });
   }
@@ -301,6 +327,7 @@ function validateMarginIntent(input: {
   chainId: number | null;
   walletAddress: string | null;
   leverageMultiplier: Prisma.Decimal | null;
+  marginCollateral: Prisma.Decimal | null;
 }) {
   if (!input.chainId) {
     throw new AppError("Margin intents require chainId", {
@@ -312,6 +339,13 @@ function validateMarginIntent(input: {
   if (!input.walletAddress) {
     throw new AppError("Margin intents require walletAddress", {
       code: "MARGIN_WALLET_REQUIRED",
+      statusCode: 422,
+    });
+  }
+
+  if (!input.marginCollateral) {
+    throw new AppError("Margin intents require marginCollateral", {
+      code: "MARGIN_COLLATERAL_REQUIRED",
       statusCode: 422,
     });
   }
@@ -333,6 +367,31 @@ function validateMarginIntent(input: {
       },
     });
   }
+}
+
+function buildMarginAmounts(input: {
+  executionMode: ExecutionMode;
+  leverageMultiplier: Prisma.Decimal | null;
+  marginCollateral: Prisma.Decimal | null;
+}) {
+  if (input.executionMode !== ExecutionMode.MARGIN) {
+    return {
+      marginCollateral: null,
+      notionalAmount: null,
+      borrowedAmount: null,
+    };
+  }
+
+  const leverageMultiplier = input.leverageMultiplier as Prisma.Decimal;
+  const marginCollateral = input.marginCollateral as Prisma.Decimal;
+  const notionalAmount = marginCollateral.mul(leverageMultiplier);
+  const borrowedAmount = notionalAmount.minus(marginCollateral);
+
+  return {
+    marginCollateral,
+    notionalAmount,
+    borrowedAmount,
+  };
 }
 
 function normalizeChainId(chainId: number | null | undefined) {
@@ -374,7 +433,7 @@ function parseLeverageMultiplier(value: string | null | undefined) {
 
   const normalized = value.trim();
 
-  if (!decimalInputPattern.test(normalized)) {
+  if (!leverageDecimalInputPattern.test(normalized)) {
     throw new AppError("leverageMultiplier must be a decimal string with up to 4 decimals", {
       code: "INVALID_LEVERAGE_MULTIPLIER",
       statusCode: 422,
@@ -386,6 +445,32 @@ function parseLeverageMultiplier(value: string | null | undefined) {
   if (decimal.lte(0)) {
     throw new AppError("leverageMultiplier must be greater than zero", {
       code: "INVALID_LEVERAGE_MULTIPLIER",
+      statusCode: 422,
+    });
+  }
+
+  return decimal;
+}
+
+function parseMarginCollateral(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+
+  if (!amountDecimalInputPattern.test(normalized)) {
+    throw new AppError("marginCollateral must be a decimal string with up to 8 decimals", {
+      code: "INVALID_MARGIN_COLLATERAL",
+      statusCode: 422,
+    });
+  }
+
+  const decimal = new Prisma.Decimal(normalized);
+
+  if (decimal.lte(0)) {
+    throw new AppError("marginCollateral must be greater than zero", {
+      code: "INVALID_MARGIN_COLLATERAL",
       statusCode: 422,
     });
   }
