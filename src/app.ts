@@ -4,6 +4,10 @@ import { env } from "./config/index.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerMarketRoutes } from "./routes/markets.js";
+import { registerPositionRoutes } from "./routes/positions.js";
+import { registerSignalRoutes } from "./routes/signals.js";
+import { registerStatsRoutes } from "./routes/stats.js";
+import { registerUserRoutes } from "./routes/users.js";
 
 export async function buildApp() {
   const app = fastify({
@@ -14,7 +18,11 @@ export async function buildApp() {
 
   registerErrorHandler(app);
   await registerHealthRoutes(app);
+  await registerUserRoutes(app);
   await registerMarketRoutes(app);
+  await registerSignalRoutes(app);
+  await registerPositionRoutes(app);
+  await registerStatsRoutes(app);
 
   return app;
 }

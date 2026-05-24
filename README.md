@@ -45,8 +45,23 @@ npm run db:deploy
 ## HTTP
 
 - `GET /health` returns API health status.
+- `POST /social-accounts` creates or fetches a real user from a Telegram or Farcaster identity.
+- `POST /trader-profiles` creates or updates a trader profile for a real user.
+- `GET /trader-profiles/:id` returns one trader profile.
 - `GET /markets` returns persisted market records. Until a real provider integration is added, this returns an empty list when no markets have been synced.
 - `GET /markets/:id` returns one persisted market record by internal market id.
+- `POST /signals` creates a trade signal against an existing trader profile and synced market.
+- `GET /signals/:id` returns one trade signal.
+- `GET /markets/:marketId/signals` returns signals for one market.
+- `GET /trader-profiles/:traderProfileId/signals` returns signals from one trader profile.
+- `POST /positions` creates a pending execution position intent for an existing user and market.
+- `GET /positions/:id` returns one position intent.
+- `GET /users/:userId/positions` returns positions for one user.
+- `GET /trader-profiles/:traderProfileId/positions` returns positions for the user behind one trader profile.
+- `POST /copy-trades` creates a pending execution copy intent against an existing source position.
+- `GET /positions/:positionId/copy-trades` returns copy intents for one source position.
+- `GET /leaderboard` returns trader stats calculated from real database records.
+- `GET /trader-profiles/:id/stats` returns stats for one trader profile.
 
 ## Market Data
 
@@ -66,6 +81,203 @@ npm run markets:sync:polymarket -- --limit=50
 ```
 
 If Polymarket or PostgreSQL is unavailable, the command exits with `POLYMARKET_SYNC_FAILED` and does not insert placeholder records.
+
+## Trade Signals
+
+Trade signals are expressions of thesis or intent. Creating a signal does not create a position, calculate PnL, or imply execution. The referenced trader profile and market must already exist in the database.
+
+Create a signal:
+
+```sh
+curl -X POST http://localhost:3000/signals \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "traderProfileId": "existing-trader-profile-id",
+    "marketId": "existing-market-id",
+    "side": "YES",
+    "thesis": "Market thesis based on the trader's real view.",
+    "convictionLevel": 75,
+    "source": "WEB"
+  }'
+```
+
+Read signals:
+
+```sh
+curl http://localhost:3000/signals/:id
+curl http://localhost:3000/markets/:marketId/signals
+curl http://localhost:3000/trader-profiles/:traderProfileId/signals
+```
+
+## Positions and Copy Intents
+
+Positions and copy records are intent records until a real execution adapter is added. New records are created with `PENDING_EXECUTION`. They must not be marked `EXECUTED` unless a real adapter confirms execution. Failed or cancelled attempts can use `FAILED` or `CANCELLED` once execution handling exists.
+
+Execution fields such as `averageEntryPrice`, `executedQuantity`, `executionPrice`, `resultingPositionId`, and `openedAt` stay `null` when there is no confirmed execution. The API does not calculate PnL.
+
+When a synced market has real price fields, the API stores an `observedMarketPrice` snapshot from the market record at intent creation time. If no real market price is available, `observedMarketPrice`, `observedMarketPriceSource`, and `observedMarketPriceAt` are returned as `null`.
+
+Create a position intent:
+
+```sh
+curl -X POST http://localhost:3000/positions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "existing-user-id",
+    "marketId": "existing-market-id",
+    "side": "YES",
+    "quantity": "10.00000000"
+  }'
+```
+
+Create a copy intent:
+
+```sh
+curl -X POST http://localhost:3000/copy-trades \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "followerId": "existing-user-id",
+    "sourcePositionId": "existing-source-position-id",
+    "requestedQuantity": "5.00000000"
+  }'
+```
+
+Read positions and copy intents:
+
+```sh
+curl http://localhost:3000/positions/:id
+curl http://localhost:3000/users/:userId/positions
+curl http://localhost:3000/trader-profiles/:traderProfileId/positions
+curl http://localhost:3000/positions/:positionId/copy-trades
+```
+
+## Real Stats and Leaderboard
+
+Stats are calculated from persisted records only:
+
+- `numberOfSignals` counts real `TradeSignal` rows for a trader profile.
+- `numberOfCopyIntents` counts real `CopyTrade` rows submitted against positions owned by the trader profile's user.
+- `copiedVolume` sums `requestedQuantity` from those submitted copy intents.
+- `executedCopiedVolume` sums `executedQuantity` only for copy intents with `EXECUTED` status; it returns `null` when there are no executed copy intents.
+- `realizedPnl` returns `null` until real execution and close data exists in the database.
+
+The leaderboard does not invent win rate, PnL, trader performance, or copied volume. Entries are sorted by real copy intent count, copied volume, then signal count.
+
+Read stats:
+
+```sh
+curl http://localhost:3000/leaderboard
+curl http://localhost:3000/trader-profiles/:id/stats
+```
+
+## Demo Readiness
+
+This demo flow uses real local records created through the API. Replace every placeholder with a real local operator value. Do not seed fake users, fake traders, fake markets, fake positions, or fake trade history.
+
+Start PostgreSQL, apply migrations, and run the API:
+
+```sh
+npm install
+cp .env.example .env
+npm run db:generate
+npm run db:deploy
+npm run dev
+```
+
+Sync real markets from Polymarket. If the provider is unavailable, stop here and keep the market empty state visible.
+
+```sh
+npm run markets:sync:polymarket -- --limit=10
+curl http://localhost:3000/markets
+```
+
+Create or fetch a real Telegram user record. Use your own Telegram numeric ID and username, or run `/start` in the Telegram bot once it points at this API.
+
+```sh
+curl -X POST http://localhost:3000/social-accounts \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "platform": "TELEGRAM",
+    "platformUserId": "<your-real-telegram-user-id>",
+    "username": "<your-real-telegram-username>",
+    "displayName": "<your-real-display-name>",
+    "profileUrl": "https://t.me/<your-real-telegram-username>"
+  }'
+```
+
+Create or update a trader profile for that real user. Use the returned `user.id` from the previous response.
+
+```sh
+curl -X POST http://localhost:3000/trader-profiles \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "<real-user-id>",
+    "handle": "<real-trader-handle>",
+    "bio": "Local demo profile for a real operator."
+  }'
+```
+
+Create a signal against a synced market. Use a real `market.id` from `GET /markets` and the real `traderProfile.id` from the previous response.
+
+```sh
+curl -X POST http://localhost:3000/signals \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "traderProfileId": "<real-trader-profile-id>",
+    "marketId": "<real-synced-market-id>",
+    "side": "YES",
+    "thesis": "My real thesis for this market.",
+    "convictionLevel": 75,
+    "source": "WEB"
+  }'
+```
+
+Create a pending position intent from real user input. This is not execution and does not create PnL.
+
+```sh
+curl -X POST http://localhost:3000/positions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "<real-user-id>",
+    "marketId": "<real-synced-market-id>",
+    "side": "YES",
+    "quantity": "10.00000000"
+  }'
+```
+
+Create a second real user, then submit a copy intent against the source position. The response should remain `PENDING_EXECUTION` until a real execution adapter exists.
+
+```sh
+curl -X POST http://localhost:3000/copy-trades \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "followerId": "<real-follower-user-id>",
+    "sourcePositionId": "<real-source-position-id>",
+    "requestedQuantity": "5.00000000"
+  }'
+```
+
+Check the demo read endpoints:
+
+```sh
+curl http://localhost:3000/health
+curl http://localhost:3000/leaderboard
+curl http://localhost:3000/trader-profiles/<real-trader-profile-id>/stats
+curl http://localhost:3000/positions/<real-source-position-id>/copy-trades
+```
+
+Demo script:
+
+1. Run core API on `http://localhost:3000`.
+2. Sync real Polymarket markets or show the empty market state if sync is unavailable.
+3. Start Telegram with `CORE_API_URL=http://localhost:3000`.
+4. Start Farcaster/web with the same `CORE_API_URL=http://localhost:3000`.
+5. Create or fetch a real Telegram user through `/start` or `POST /social-accounts`.
+6. Create a real trader profile for that user.
+7. Create a trade signal against a real synced market.
+8. Open the Farcaster signal page and share the Mini App card.
+9. Submit a copy intent from another real user.
+10. Confirm leaderboard and stats update only from the recorded signal/copy-intent rows.
 
 ## Structure
 
