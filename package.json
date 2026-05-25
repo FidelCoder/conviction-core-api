@@ -17,7 +17,9 @@
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
     "markets:sync:polymarket": "tsx src/commands/sync-polymarket-markets.ts",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "db:local:up": "docker compose up -d mongo",
+    "db:local:down": "docker compose down"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",

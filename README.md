@@ -9,12 +9,13 @@ Package manager: npm.
 ```sh
 npm install
 cp .env.example .env
+npm run db:local:up
 npm run db:generate
 npm run db:push
 npm run dev
 ```
 
-The API expects MongoDB. Set `DATABASE_URL` in `.env`, then run `npm run db:push` to sync Prisma indexes and collections before starting the server. Use MongoDB Atlas or another replica-set backed MongoDB deployment for production.
+The API expects MongoDB. The default `.env.example` points to the local Docker MongoDB replica set. Run `npm run db:local:up`, then `npm run db:push` to sync Prisma indexes and collections before starting the server. Use MongoDB Atlas or another publicly reachable replica-set backed MongoDB deployment for production/Vercel.
 
 ## Commands
 
@@ -23,6 +24,8 @@ The API expects MongoDB. Set `DATABASE_URL` in `.env`, then run `npm run db:push
 - `npm run lint` runs ESLint.
 - `npm run format` runs Prettier.
 - `npm run format:check` checks formatting.
+- `npm run db:local:up` starts the local MongoDB replica-set container.
+- `npm run db:local:down` stops the local MongoDB container.
 - `npm run db:generate` generates the Prisma client.
 - `npm run db:push` syncs the Prisma schema to MongoDB. MongoDB does not use the old PostgreSQL migration files.
 - `npm run db:studio` opens Prisma Studio.
@@ -40,7 +43,7 @@ Prisma Migrate is not used for this MongoDB setup. Numeric trading values are st
 
 ## Vercel Deployment
 
-The API uses the Vercel Fastify runtime from `src/index.ts`. Production needs a real MongoDB connection string before deployment; do not deploy with a placeholder database URL for beta testing.
+The API uses the Vercel Fastify runtime from `src/index.ts`. Production needs a real MongoDB connection string before deployment; `mongodb://127.0.0.1:27017/...` is only for local development and will not be reachable from Vercel.
 
 Required Vercel environment variables:
 
@@ -207,11 +210,12 @@ curl http://localhost:3000/trader-profiles/:id/stats
 
 This demo flow uses real local records created through the API. Replace every placeholder with a real local operator value. Do not seed fake users, fake traders, fake markets, fake positions, or fake trade history.
 
-Connect MongoDB, sync the schema, and run the API:
+Start local MongoDB, sync the schema, and run the API:
 
 ```sh
 npm install
 cp .env.example .env
+npm run db:local:up
 npm run db:generate
 npm run db:push
 npm run dev
