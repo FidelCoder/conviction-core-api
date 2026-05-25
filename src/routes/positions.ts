@@ -1,4 +1,4 @@
-import { PositionSide } from "@prisma/client";
+import { ExecutionMode, PositionSide } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 
 import { AppError } from "../lib/errors.js";
@@ -33,6 +33,12 @@ type CreatePositionBody = {
   marketId: string;
   side: PositionSide;
   quantity: string;
+  executionMode?: ExecutionMode;
+  chainId?: number | null;
+  walletAddress?: string | null;
+  leverageMultiplier?: string | null;
+  marginCollateral?: string | null;
+  idempotencyKey?: string | null;
 };
 
 type CreateCopyTradeBody = {
@@ -43,11 +49,12 @@ type CreateCopyTradeBody = {
 };
 
 const positionSideValues = Object.values(PositionSide);
+const executionModeValues = Object.values(ExecutionMode);
 const decimalStringSchema = {
   type: "string",
   minLength: 1,
   maxLength: 40,
-  pattern: "^(?:0|[1-9]\\d*)(?:\\.\\d{1,8})?$",
+  pattern: String.raw`^(?:0|[1-9]\d*)(?:\.\d{1,8})?$`,
 };
 
 export async function registerPositionRoutes(app: FastifyInstance) {
@@ -64,6 +71,12 @@ export async function registerPositionRoutes(app: FastifyInstance) {
             marketId: { type: "string", minLength: 1 },
             side: { type: "string", enum: positionSideValues },
             quantity: decimalStringSchema,
+            executionMode: { type: "string", enum: executionModeValues, nullable: true },
+            chainId: { type: "integer", minimum: 1, nullable: true },
+            walletAddress: { type: "string", minLength: 1, maxLength: 64, nullable: true },
+            leverageMultiplier: { ...decimalStringSchema, nullable: true },
+            marginCollateral: { ...decimalStringSchema, nullable: true },
+            idempotencyKey: { type: "string", minLength: 1, maxLength: 128, nullable: true },
           },
         },
       },

@@ -1,10 +1,21 @@
 import type { CopyTrade, Market, Position } from "@prisma/client";
-import { CopyTradeStatus, PositionSide, PositionStatus, Prisma } from "@prisma/client";
+import {
+  CopyTradeStatus,
+  ExecutionMode,
+  PositionSide,
+  PositionStatus,
+  Prisma,
+} from "@prisma/client";
 
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import {
+  isSupportedExecutionIntentChain,
+  MAX_PENDING_MARGIN_LEVERAGE,
+} from "./execution.js";
 
 const decimalInputPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/;
+const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
 
 type MarketPriceSnapshot = Pick<
   Market,
@@ -16,6 +27,12 @@ export type CreatePositionInput = {
   marketId: string;
   side: PositionSide;
   quantity: string;
+  executionMode?: ExecutionMode;
+  chainId?: number | null;
+  walletAddress?: string | null;
+  leverageMultiplier?: string | null;
+  marginCollateral?: string | null;
+  idempotencyKey?: string | null;
 };
 
 export type CreateCopyTradeInput = {
@@ -35,6 +52,16 @@ export type NormalizedPosition = {
   observedMarketPrice: string | null;
   observedMarketPriceSource: string | null;
   observedMarketPriceAt: string | null;
+  chainId: number | null;
+  walletAddress: string | null;
+  executionMode: Position["executionMode"];
+  leverageMultiplier: string | null;
+  marginCollateral: string | null;
+  notionalAmount: string | null;
+  borrowedAmount: string | null;
+  executionAdapterId: string | null;
+  chainTransactionHash: string | null;
+  idempotencyKey: string | null;
   status: Position["status"];
   openedAt: string | null;
   closedAt: string | null;
@@ -53,6 +80,16 @@ export type NormalizedCopyTrade = {
   observedMarketPrice: string | null;
   observedMarketPriceSource: string | null;
   observedMarketPriceAt: string | null;
+  chainId: number | null;
+  walletAddress: string | null;
+  executionMode: CopyTrade["executionMode"];
+  leverageMultiplier: string | null;
+  marginCollateral: string | null;
+  notionalAmount: string | null;
+  borrowedAmount: string | null;
+  executionAdapterId: string | null;
+  chainTransactionHash: string | null;
+  idempotencyKey: string | null;
   resultingPositionId: string | null;
   status: CopyTrade["status"];
   externalOrderId: string | null;
@@ -63,6 +100,7 @@ export type NormalizedCopyTrade = {
 
 export async function createPosition(input: CreatePositionInput) {
   const quantity = parsePositiveDecimal(input.quantity, "quantity");
+  const executionMetadata = buildExecutionMetadata(input);
   const [user, market] = await Promise.all([
     prisma.user.findUnique({ where: { id: input.userId } }),
     prisma.market.findUnique({ where: { id: input.marketId } }),
@@ -93,6 +131,7 @@ export async function createPosition(input: CreatePositionInput) {
       observedMarketPrice: observedPrice.price,
       observedMarketPriceSource: observedPrice.source,
       observedMarketPriceAt: observedPrice.observedAt,
+      ...executionMetadata,
       status: PositionStatus.PENDING_EXECUTION,
       openedAt: null,
     },
@@ -207,6 +246,7 @@ export async function createCopyTrade(input: CreateCopyTradeInput) {
       observedMarketPrice: observedPrice.price,
       observedMarketPriceSource: observedPrice.source,
       observedMarketPriceAt: observedPrice.observedAt,
+      executionMode: ExecutionMode.SPOT,
       resultingPositionId: null,
       status: CopyTradeStatus.PENDING_EXECUTION,
     },
@@ -244,6 +284,16 @@ export function normalizePosition(position: Position): NormalizedPosition {
     observedMarketPrice: position.observedMarketPrice?.toString() ?? null,
     observedMarketPriceSource: position.observedMarketPriceSource,
     observedMarketPriceAt: position.observedMarketPriceAt?.toISOString() ?? null,
+    chainId: position.chainId,
+    walletAddress: position.walletAddress,
+    executionMode: position.executionMode,
+    leverageMultiplier: position.leverageMultiplier?.toString() ?? null,
+    marginCollateral: position.marginCollateral?.toString() ?? null,
+    notionalAmount: position.notionalAmount?.toString() ?? null,
+    borrowedAmount: position.borrowedAmount?.toString() ?? null,
+    executionAdapterId: position.executionAdapterId,
+    chainTransactionHash: position.chainTransactionHash,
+    idempotencyKey: position.idempotencyKey,
     status: position.status,
     openedAt: position.openedAt?.toISOString() ?? null,
     closedAt: position.closedAt?.toISOString() ?? null,
@@ -264,12 +314,110 @@ export function normalizeCopyTrade(copyTrade: CopyTrade): NormalizedCopyTrade {
     observedMarketPrice: copyTrade.observedMarketPrice?.toString() ?? null,
     observedMarketPriceSource: copyTrade.observedMarketPriceSource,
     observedMarketPriceAt: copyTrade.observedMarketPriceAt?.toISOString() ?? null,
+    chainId: copyTrade.chainId,
+    walletAddress: copyTrade.walletAddress,
+    executionMode: copyTrade.executionMode,
+    leverageMultiplier: copyTrade.leverageMultiplier?.toString() ?? null,
+    marginCollateral: copyTrade.marginCollateral?.toString() ?? null,
+    notionalAmount: copyTrade.notionalAmount?.toString() ?? null,
+    borrowedAmount: copyTrade.borrowedAmount?.toString() ?? null,
+    executionAdapterId: copyTrade.executionAdapterId,
+    chainTransactionHash: copyTrade.chainTransactionHash,
+    idempotencyKey: copyTrade.idempotencyKey,
     resultingPositionId: copyTrade.resultingPositionId,
     status: copyTrade.status,
     externalOrderId: copyTrade.externalOrderId,
     errorMessage: copyTrade.errorMessage,
     createdAt: copyTrade.createdAt.toISOString(),
     updatedAt: copyTrade.updatedAt.toISOString(),
+  };
+}
+
+function buildExecutionMetadata(input: CreatePositionInput) {
+  const executionMode = input.executionMode ?? ExecutionMode.SPOT;
+  const idempotencyKey = normalizeNullableString(input.idempotencyKey);
+
+  if (executionMode === ExecutionMode.SPOT) {
+    return {
+      chainId: input.chainId ?? null,
+      walletAddress: normalizeNullableString(input.walletAddress),
+      executionMode,
+      leverageMultiplier: null,
+      marginCollateral: null,
+      notionalAmount: null,
+      borrowedAmount: null,
+      executionAdapterId: null,
+      chainTransactionHash: null,
+      idempotencyKey,
+    };
+  }
+
+  if (!input.chainId) {
+    throw new AppError("Execution chain is required for margin intents", {
+      code: "MARGIN_CHAIN_REQUIRED",
+      statusCode: 422,
+    });
+  }
+
+  if (!isSupportedExecutionIntentChain(input.chainId)) {
+    throw new AppError("Execution chain is not enabled for margin intents", {
+      code: "UNSUPPORTED_EXECUTION_CHAIN",
+      statusCode: 422,
+      details: { chainId: input.chainId },
+    });
+  }
+
+  const walletAddress = normalizeNullableString(input.walletAddress);
+
+  if (!walletAddress || !evmAddressPattern.test(walletAddress)) {
+    throw new AppError("A valid EVM wallet address is required for margin intents", {
+      code: "INVALID_WALLET_ADDRESS",
+      statusCode: 422,
+    });
+  }
+
+  if (!input.leverageMultiplier) {
+    throw new AppError("Leverage multiplier is required for margin intents", {
+      code: "MARGIN_LEVERAGE_REQUIRED",
+      statusCode: 422,
+    });
+  }
+
+  if (!input.marginCollateral) {
+    throw new AppError("Margin collateral is required for margin intents", {
+      code: "MARGIN_COLLATERAL_REQUIRED",
+      statusCode: 422,
+    });
+  }
+
+  const leverageMultiplier = parsePositiveDecimalValue(
+    input.leverageMultiplier,
+    "leverageMultiplier",
+  );
+  const marginCollateral = parsePositiveDecimalValue(input.marginCollateral, "marginCollateral");
+
+  if (leverageMultiplier.lte(1) || leverageMultiplier.gt(MAX_PENDING_MARGIN_LEVERAGE)) {
+    throw new AppError("Margin leverage must be greater than 1 and within the pending beta limit", {
+      code: "INVALID_MARGIN_LEVERAGE",
+      statusCode: 422,
+      details: { maxPendingMarginLeverage: MAX_PENDING_MARGIN_LEVERAGE },
+    });
+  }
+
+  const notionalAmount = marginCollateral.mul(leverageMultiplier);
+  const borrowedAmount = notionalAmount.minus(marginCollateral);
+
+  return {
+    chainId: input.chainId,
+    walletAddress,
+    executionMode,
+    leverageMultiplier: leverageMultiplier.toString(),
+    marginCollateral: marginCollateral.toString(),
+    notionalAmount: notionalAmount.toString(),
+    borrowedAmount: borrowedAmount.toString(),
+    executionAdapterId: null,
+    chainTransactionHash: null,
+    idempotencyKey,
   };
 }
 
@@ -308,6 +456,10 @@ function getObservedMarketPrice(market: MarketPriceSnapshot) {
 }
 
 function parsePositiveDecimal(value: string, fieldName: string) {
+  return parsePositiveDecimalValue(value, fieldName).toString();
+}
+
+function parsePositiveDecimalValue(value: string, fieldName: string) {
   if (!decimalInputPattern.test(value)) {
     throw new AppError("Decimal amount must be a positive string with up to 8 decimal places", {
       code: "INVALID_DECIMAL_AMOUNT",
@@ -326,5 +478,15 @@ function parsePositiveDecimal(value: string, fieldName: string) {
     });
   }
 
-  return decimal.toString();
+  return decimal;
+}
+
+function normalizeNullableString(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed.length > 0 ? trimmed : null;
 }

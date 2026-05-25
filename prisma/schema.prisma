@@ -36,6 +36,25 @@ enum PositionStatus {
   CANCELLED
 }
 
+enum ExecutionMode {
+  SPOT
+  MARGIN
+}
+
+enum ExecutionTargetType {
+  POSITION
+  COPY_TRADE
+}
+
+enum ExecutionAttemptStatus {
+  BLOCKED
+  PENDING
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
 enum TradeSignalSide {
   YES
   NO
@@ -135,28 +154,41 @@ model Market {
 }
 
 model Position {
-  id                        String         @id @default(auto()) @map("_id") @db.ObjectId
-  userId                    String         @db.ObjectId
-  marketId                  String         @db.ObjectId
+  id                        String             @id @default(auto()) @map("_id") @db.ObjectId
+  userId                    String             @db.ObjectId
+  marketId                  String             @db.ObjectId
   side                      PositionSide
   quantity                  String
   averageEntryPrice         String?
   observedMarketPrice       String?
   observedMarketPriceSource String?
   observedMarketPriceAt     DateTime?
-  status                    PositionStatus @default(PENDING_EXECUTION)
+  chainId                   Int?
+  walletAddress             String?
+  executionMode             ExecutionMode      @default(SPOT)
+  leverageMultiplier        String?
+  marginCollateral          String?
+  notionalAmount            String?
+  borrowedAmount            String?
+  executionAdapterId        String?
+  chainTransactionHash      String?
+  idempotencyKey            String?
+  status                    PositionStatus     @default(PENDING_EXECUTION)
   openedAt                  DateTime?
   closedAt                  DateTime?
-  createdAt                 DateTime       @default(now())
-  updatedAt                 DateTime       @updatedAt
-  user                      User           @relation(fields: [userId], references: [id], onDelete: NoAction)
-  market                    Market         @relation(fields: [marketId], references: [id], onDelete: NoAction)
-  sourceCopyIntents         CopyTrade[]    @relation("CopyTradeSourcePosition")
-  resultingCopyTrade        CopyTrade?     @relation("CopyTradeResultingPosition")
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+  user                      User               @relation(fields: [userId], references: [id], onDelete: NoAction)
+  market                    Market             @relation(fields: [marketId], references: [id], onDelete: NoAction)
+  sourceCopyIntents         CopyTrade[]        @relation("CopyTradeSourcePosition")
+  resultingCopyTrade        CopyTrade?         @relation("CopyTradeResultingPosition")
+  executionAttempts         ExecutionAttempt[] @relation("PositionExecutionAttempts")
 
   @@index([userId])
   @@index([marketId])
   @@index([status])
+  @@index([executionMode])
+  @@index([chainId])
 }
 
 model TradeSignal {
@@ -189,31 +221,78 @@ model TradeSignal {
 }
 
 model CopyTrade {
-  id                        String          @id @default(auto()) @map("_id") @db.ObjectId
-  followerId                String          @db.ObjectId
-  sourcePositionId          String          @db.ObjectId
-  sourceSignalId            String?         @db.ObjectId
+  id                        String             @id @default(auto()) @map("_id") @db.ObjectId
+  followerId                String             @db.ObjectId
+  sourcePositionId          String             @db.ObjectId
+  sourceSignalId            String?            @db.ObjectId
   requestedQuantity         String
   executedQuantity          String?
   executionPrice            String?
   observedMarketPrice       String?
   observedMarketPriceSource String?
   observedMarketPriceAt     DateTime?
-  resultingPositionId       String?         @unique @db.ObjectId
-  status                    CopyTradeStatus @default(PENDING_EXECUTION)
+  chainId                   Int?
+  walletAddress             String?
+  executionMode             ExecutionMode      @default(SPOT)
+  leverageMultiplier        String?
+  marginCollateral          String?
+  notionalAmount            String?
+  borrowedAmount            String?
+  executionAdapterId        String?
+  chainTransactionHash      String?
+  idempotencyKey            String?
+  resultingPositionId       String?            @unique @db.ObjectId
+  status                    CopyTradeStatus    @default(PENDING_EXECUTION)
   externalOrderId           String?
   errorMessage              String?
-  createdAt                 DateTime        @default(now())
-  updatedAt                 DateTime        @updatedAt
-  follower                  User            @relation("CopyTradeFollower", fields: [followerId], references: [id], onDelete: NoAction)
-  sourcePosition            Position        @relation("CopyTradeSourcePosition", fields: [sourcePositionId], references: [id], onDelete: NoAction)
-  sourceSignal              TradeSignal?    @relation(fields: [sourceSignalId], references: [id], onDelete: NoAction)
-  resultingPosition         Position?       @relation("CopyTradeResultingPosition", fields: [resultingPositionId], references: [id], onDelete: NoAction)
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+  follower                  User               @relation("CopyTradeFollower", fields: [followerId], references: [id], onDelete: NoAction)
+  sourcePosition            Position           @relation("CopyTradeSourcePosition", fields: [sourcePositionId], references: [id], onDelete: NoAction)
+  sourceSignal              TradeSignal?       @relation(fields: [sourceSignalId], references: [id], onDelete: NoAction)
+  resultingPosition         Position?          @relation("CopyTradeResultingPosition", fields: [resultingPositionId], references: [id], onDelete: NoAction)
+  executionAttempts         ExecutionAttempt[] @relation("CopyTradeExecutionAttempts")
 
   @@index([followerId])
   @@index([sourcePositionId])
   @@index([sourceSignalId])
   @@index([status])
+  @@index([executionMode])
+  @@index([chainId])
+}
+
+model ExecutionAttempt {
+  id                   String                 @id @default(auto()) @map("_id") @db.ObjectId
+  targetType           ExecutionTargetType
+  positionId           String?                @db.ObjectId
+  copyTradeId          String?                @db.ObjectId
+  adapterId            String
+  executionMode        ExecutionMode
+  chainId              Int?
+  walletAddress        String?
+  requestedQuantity    String?
+  leverageMultiplier   String?
+  marginCollateral     String?
+  notionalAmount       String?
+  borrowedAmount       String?
+  observedMarketPrice  String?
+  status               ExecutionAttemptStatus @default(BLOCKED)
+  failureCode          String?
+  failureMessage       String?
+  externalOrderId      String?
+  chainTransactionHash String?
+  requestPayload       Json?
+  responsePayload      Json?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  position             Position?              @relation("PositionExecutionAttempts", fields: [positionId], references: [id], onDelete: NoAction)
+  copyTrade            CopyTrade?             @relation("CopyTradeExecutionAttempts", fields: [copyTradeId], references: [id], onDelete: NoAction)
+
+  @@index([targetType])
+  @@index([positionId])
+  @@index([copyTradeId])
+  @@index([status])
+  @@index([chainId])
 }
 
 model TradingRoom {

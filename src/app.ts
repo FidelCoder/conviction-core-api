@@ -2,6 +2,7 @@ import fastify from "fastify";
 
 import { env } from "./config/index.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
+import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerMarketRoutes } from "./routes/markets.js";
 import { registerPositionRoutes } from "./routes/positions.js";
@@ -18,6 +19,7 @@ export async function buildApp() {
 
   registerErrorHandler(app);
   await registerHealthRoutes(app);
+  await registerExecutionRoutes(app);
   await registerUserRoutes(app);
   await registerMarketRoutes(app);
   await registerSignalRoutes(app);

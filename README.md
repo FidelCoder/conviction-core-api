@@ -81,6 +81,8 @@ Run `npm run db:push` against the same MongoDB deployment before beta testing ro
 ## HTTP
 
 - `GET /health` returns API health status.
+- `GET /execution/capabilities` returns the current execution capability contract for clients.
+- `POST /execution/positions/:positionId/start` records an execution attempt and blocks it while adapters/contracts are not live.
 - `POST /social-accounts` creates or fetches a real user from a Telegram or Farcaster identity.
 - `POST /trader-profiles` creates or updates a trader profile for a real user.
 - `GET /trader-profiles/:id` returns one trader profile.
@@ -144,6 +146,38 @@ curl http://localhost:3000/signals/:id
 curl http://localhost:3000/markets/:marketId/signals
 curl http://localhost:3000/trader-profiles/:traderProfileId/signals
 ```
+
+## Execution Intents
+
+The API supports intent-first execution records for beta testing. Clients may create margin position intents with `executionMode=MARGIN`, EVM chain metadata, wallet address, collateral, and leverage. These records stay `PENDING_EXECUTION`. Starting execution creates an `ExecutionAttempt` with `BLOCKED` status until real contracts, vault liquidity, liquidation rules, and provider adapters are live.
+
+Current capability discovery:
+
+```sh
+curl http://localhost:3000/execution/capabilities
+```
+
+Create a margin intent and record the blocked attempt:
+
+```sh
+curl -X POST http://localhost:3000/positions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "userId": "existing-user-id",
+    "marketId": "existing-market-id",
+    "side": "YES",
+    "quantity": "10",
+    "executionMode": "MARGIN",
+    "chainId": 8453,
+    "walletAddress": "0x0000000000000000000000000000000000000000",
+    "leverageMultiplier": "3",
+    "marginCollateral": "25"
+  }'
+
+curl -X POST http://localhost:3000/execution/positions/:positionId/start
+```
+
+This does not execute a trade, submit an order, create PnL, or mark a position as executed.
 
 ## Positions and Copy Intents
 
