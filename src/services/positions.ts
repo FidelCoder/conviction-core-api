@@ -326,5 +326,5 @@ function parsePositiveDecimal(value: string, fieldName: string) {
     });
   }
 
-  return decimal;
+  return decimal.toString();
 }

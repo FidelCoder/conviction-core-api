@@ -52,50 +52,54 @@ export async function listLeaderboard(limit = 25): Promise<LeaderboardEntry[]> {
 }
 
 async function buildTraderStats(traderProfile: TraderProfile): Promise<TraderStats> {
-  const copyIntentWhere = {
-    sourcePosition: {
-      is: {
-        userId: traderProfile.userId,
-      },
-    },
-  };
-  const executedCopyIntentWhere = {
-    ...copyIntentWhere,
-    status: CopyTradeStatus.EXECUTED,
-  };
-
-  const [numberOfSignals, copyIntentAggregate, executedCopyIntentAggregate] = await Promise.all([
+  const [numberOfSignals, ownedPositions] = await Promise.all([
     prisma.tradeSignal.count({
       where: { traderProfileId: traderProfile.id },
     }),
-    prisma.copyTrade.aggregate({
-      where: copyIntentWhere,
-      _count: { _all: true },
-      _sum: { requestedQuantity: true },
-    }),
-    prisma.copyTrade.aggregate({
-      where: executedCopyIntentWhere,
-      _count: { _all: true },
-      _sum: { executedQuantity: true },
+    prisma.position.findMany({
+      where: { userId: traderProfile.userId },
+      select: { id: true },
     }),
   ]);
-
-  const executedCopyIntentCount = executedCopyIntentAggregate._count._all;
+  const sourcePositionIds = ownedPositions.map((position) => position.id);
+  const copyIntents =
+    sourcePositionIds.length > 0
+      ? await prisma.copyTrade.findMany({
+          where: {
+            sourcePositionId: { in: sourcePositionIds },
+          },
+          select: {
+            requestedQuantity: true,
+            executedQuantity: true,
+            status: true,
+          },
+        })
+      : [];
+  const executedCopyIntents = copyIntents.filter(
+    (copyIntent) => copyIntent.status === CopyTradeStatus.EXECUTED,
+  );
+  const copiedVolume = sumDecimalStrings(
+    copyIntents.map((copyIntent) => copyIntent.requestedQuantity),
+  );
+  const executedCopiedVolume = sumDecimalStrings(
+    executedCopyIntents.map((copyIntent) => copyIntent.executedQuantity ?? "0"),
+  );
 
   return {
     traderProfileId: traderProfile.id,
     userId: traderProfile.userId,
     handle: traderProfile.handle,
     numberOfSignals,
-    numberOfCopyIntents: copyIntentAggregate._count._all,
-    copiedVolume: copyIntentAggregate._sum.requestedQuantity?.toString() ?? "0",
-    executedCopyIntentCount,
-    executedCopiedVolume:
-      executedCopyIntentCount > 0
-        ? (executedCopyIntentAggregate._sum.executedQuantity?.toString() ?? "0")
-        : null,
+    numberOfCopyIntents: copyIntents.length,
+    copiedVolume,
+    executedCopyIntentCount: executedCopyIntents.length,
+    executedCopiedVolume: executedCopyIntents.length > 0 ? executedCopiedVolume : null,
     realizedPnl: null,
   };
+}
+
+function sumDecimalStrings(values: string[]) {
+  return values.reduce((sum, value) => sum.plus(value), new Prisma.Decimal(0)).toString();
 }
 
 function compareTraderStats(a: TraderStats, b: TraderStats) {

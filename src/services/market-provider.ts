@@ -1,4 +1,4 @@
-import type { Market, MarketSource, Prisma } from "@prisma/client";
+import type { Market, MarketSource } from "@prisma/client";
 
 export type ProviderMarketInput = {
   externalMarketId: string;
@@ -16,11 +16,11 @@ export type ProviderMarketInput = {
   questionId?: string | null;
   orderBookEnabled?: boolean;
   acceptingOrders?: boolean;
-  orderPriceMinTickSize?: Prisma.Decimal | string | number | null;
-  orderMinSize?: Prisma.Decimal | string | number | null;
-  lastTradePrice?: Prisma.Decimal | string | number | null;
-  bestBid?: Prisma.Decimal | string | number | null;
-  bestAsk?: Prisma.Decimal | string | number | null;
+  orderPriceMinTickSize?: string | number | null;
+  orderMinSize?: string | number | null;
+  lastTradePrice?: string | number | null;
+  bestBid?: string | number | null;
+  bestAsk?: string | number | null;
 };
 
 export type MarketProvider = {

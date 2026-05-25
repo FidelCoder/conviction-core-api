@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
@@ -61,7 +61,7 @@ enum CopyTradeStatus {
 }
 
 model User {
-  id             String          @id @default(cuid())
+  id             String          @id @default(auto()) @map("_id") @db.ObjectId
   displayName    String?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
@@ -73,33 +73,33 @@ model User {
 }
 
 model SocialAccount {
-  id             String         @id @default(cuid())
-  userId         String
+  id             String         @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String         @db.ObjectId
   platform       SocialPlatform
   platformUserId String
   username       String?
   profileUrl     String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: NoAction)
 
   @@unique([platform, platformUserId])
   @@index([userId])
 }
 
 model TraderProfile {
-  id           String        @id @default(cuid())
-  userId       String        @unique
+  id           String        @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String        @unique @db.ObjectId
   handle       String        @unique
   bio          String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: NoAction)
   tradeSignals TradeSignal[]
 }
 
 model Market {
-  id                    String        @id @default(cuid())
+  id                    String        @id @default(auto()) @map("_id") @db.ObjectId
   externalMarketId      String
   source                MarketSource
   title                 String
@@ -115,11 +115,11 @@ model Market {
   questionId            String?
   orderBookEnabled      Boolean       @default(false)
   acceptingOrders       Boolean       @default(false)
-  orderPriceMinTickSize Decimal?      @db.Decimal(18, 8)
-  orderMinSize          Decimal?      @db.Decimal(18, 8)
-  lastTradePrice        Decimal?      @db.Decimal(18, 8)
-  bestBid               Decimal?      @db.Decimal(18, 8)
-  bestAsk               Decimal?      @db.Decimal(18, 8)
+  orderPriceMinTickSize String?
+  orderMinSize          String?
+  lastTradePrice        String?
+  bestBid               String?
+  bestAsk               String?
   syncedAt              DateTime?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
@@ -135,13 +135,13 @@ model Market {
 }
 
 model Position {
-  id                        String         @id @default(cuid())
-  userId                    String
-  marketId                  String
+  id                        String         @id @default(auto()) @map("_id") @db.ObjectId
+  userId                    String         @db.ObjectId
+  marketId                  String         @db.ObjectId
   side                      PositionSide
-  quantity                  Decimal        @db.Decimal(18, 8)
-  averageEntryPrice         Decimal?       @db.Decimal(18, 8)
-  observedMarketPrice       Decimal?       @db.Decimal(18, 8)
+  quantity                  String
+  averageEntryPrice         String?
+  observedMarketPrice       String?
   observedMarketPriceSource String?
   observedMarketPriceAt     DateTime?
   status                    PositionStatus @default(PENDING_EXECUTION)
@@ -149,8 +149,8 @@ model Position {
   closedAt                  DateTime?
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt
-  user                      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  market                    Market         @relation(fields: [marketId], references: [id], onDelete: Restrict)
+  user                      User           @relation(fields: [userId], references: [id], onDelete: NoAction)
+  market                    Market         @relation(fields: [marketId], references: [id], onDelete: NoAction)
   sourceCopyIntents         CopyTrade[]    @relation("CopyTradeSourcePosition")
   resultingCopyTrade        CopyTrade?     @relation("CopyTradeResultingPosition")
 
@@ -160,24 +160,24 @@ model Position {
 }
 
 model TradeSignal {
-  id              String            @id @default(cuid())
-  traderProfileId String
-  marketId        String
-  roomId          String?
+  id              String            @id @default(auto()) @map("_id") @db.ObjectId
+  traderProfileId String            @db.ObjectId
+  marketId        String            @db.ObjectId
+  roomId          String?           @db.ObjectId
   side            TradeSignalSide
   thesis          String
   convictionLevel Int?
   source          TradeSignalSource
-  limitPrice      Decimal?          @db.Decimal(18, 8)
-  quantity        Decimal?          @db.Decimal(18, 8)
+  limitPrice      String?
+  quantity        String?
   rationale       String?
   status          TradeSignalStatus @default(PUBLISHED)
   expiresAt       DateTime?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
-  traderProfile   TraderProfile     @relation(fields: [traderProfileId], references: [id], onDelete: Cascade)
-  market          Market            @relation(fields: [marketId], references: [id], onDelete: Restrict)
-  room            TradingRoom?      @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  traderProfile   TraderProfile     @relation(fields: [traderProfileId], references: [id], onDelete: NoAction)
+  market          Market            @relation(fields: [marketId], references: [id], onDelete: NoAction)
+  room            TradingRoom?      @relation(fields: [roomId], references: [id], onDelete: NoAction)
   copyTrades      CopyTrade[]
 
   @@index([traderProfileId])
@@ -189,26 +189,26 @@ model TradeSignal {
 }
 
 model CopyTrade {
-  id                        String          @id @default(cuid())
-  followerId                String
-  sourcePositionId          String
-  sourceSignalId            String?
-  requestedQuantity         Decimal         @db.Decimal(18, 8)
-  executedQuantity          Decimal?        @db.Decimal(18, 8)
-  executionPrice            Decimal?        @db.Decimal(18, 8)
-  observedMarketPrice       Decimal?        @db.Decimal(18, 8)
+  id                        String          @id @default(auto()) @map("_id") @db.ObjectId
+  followerId                String          @db.ObjectId
+  sourcePositionId          String          @db.ObjectId
+  sourceSignalId            String?         @db.ObjectId
+  requestedQuantity         String
+  executedQuantity          String?
+  executionPrice            String?
+  observedMarketPrice       String?
   observedMarketPriceSource String?
   observedMarketPriceAt     DateTime?
-  resultingPositionId       String?         @unique
+  resultingPositionId       String?         @unique @db.ObjectId
   status                    CopyTradeStatus @default(PENDING_EXECUTION)
   externalOrderId           String?
   errorMessage              String?
   createdAt                 DateTime        @default(now())
   updatedAt                 DateTime        @updatedAt
-  follower                  User            @relation("CopyTradeFollower", fields: [followerId], references: [id], onDelete: Cascade)
-  sourcePosition            Position        @relation("CopyTradeSourcePosition", fields: [sourcePositionId], references: [id], onDelete: Restrict)
-  sourceSignal              TradeSignal?    @relation(fields: [sourceSignalId], references: [id], onDelete: SetNull)
-  resultingPosition         Position?       @relation("CopyTradeResultingPosition", fields: [resultingPositionId], references: [id], onDelete: SetNull)
+  follower                  User            @relation("CopyTradeFollower", fields: [followerId], references: [id], onDelete: NoAction)
+  sourcePosition            Position        @relation("CopyTradeSourcePosition", fields: [sourcePositionId], references: [id], onDelete: NoAction)
+  sourceSignal              TradeSignal?    @relation(fields: [sourceSignalId], references: [id], onDelete: NoAction)
+  resultingPosition         Position?       @relation("CopyTradeResultingPosition", fields: [resultingPositionId], references: [id], onDelete: NoAction)
 
   @@index([followerId])
   @@index([sourcePositionId])
@@ -217,13 +217,13 @@ model CopyTrade {
 }
 
 model TradingRoom {
-  id          String        @id @default(cuid())
-  ownerId     String
+  id          String        @id @default(auto()) @map("_id") @db.ObjectId
+  ownerId     String        @db.ObjectId
   name        String
   description String?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
-  owner       User          @relation("TradingRoomOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  owner       User          @relation("TradingRoomOwner", fields: [ownerId], references: [id], onDelete: NoAction)
   signals     TradeSignal[]
 
   @@index([ownerId])

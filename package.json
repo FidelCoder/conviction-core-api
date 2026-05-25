@@ -15,10 +15,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "markets:sync:polymarket": "tsx src/commands/sync-polymarket-markets.ts"
+    "markets:sync:polymarket": "tsx src/commands/sync-polymarket-markets.ts",
+    "db:push": "prisma db push"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",

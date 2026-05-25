@@ -10,10 +10,11 @@ Package manager: npm.
 npm install
 cp .env.example .env
 npm run db:generate
+npm run db:push
 npm run dev
 ```
 
-The API expects PostgreSQL. Set `DATABASE_URL` in `.env` before running migrations or starting the server.
+The API expects MongoDB. Set `DATABASE_URL` in `.env`, then run `npm run db:push` to sync Prisma indexes and collections before starting the server. Use MongoDB Atlas or another replica-set backed MongoDB deployment for production.
 
 ## Commands
 
@@ -23,24 +24,19 @@ The API expects PostgreSQL. Set `DATABASE_URL` in `.env` before running migratio
 - `npm run format` runs Prettier.
 - `npm run format:check` checks formatting.
 - `npm run db:generate` generates the Prisma client.
-- `npm run db:migrate` creates and applies local Prisma migrations.
-- `npm run db:deploy` applies committed migrations in deployed environments.
+- `npm run db:push` syncs the Prisma schema to MongoDB. MongoDB does not use the old PostgreSQL migration files.
 - `npm run db:studio` opens Prisma Studio.
 - `npm run markets:sync:polymarket -- --limit=50` syncs real active Polymarket markets from Gamma.
 
-## Database Migrations
+## Database Schema
 
-Create a migration after changing `prisma/schema.prisma`:
-
-```sh
-npm run db:migrate -- --name describe_change
-```
-
-Apply committed migrations in an environment:
+This service uses Prisma with MongoDB. After changing `prisma/schema.prisma`, sync the schema with MongoDB:
 
 ```sh
-npm run db:deploy
+npm run db:push
 ```
+
+Prisma Migrate is not used for this MongoDB setup. Numeric trading values are stored as validated decimal strings so the API does not lose precision through floating point storage.
 
 ## HTTP
 
@@ -80,7 +76,7 @@ Sync real active Polymarket markets for local development or admin use:
 npm run markets:sync:polymarket -- --limit=50
 ```
 
-If Polymarket or PostgreSQL is unavailable, the command exits with `POLYMARKET_SYNC_FAILED` and does not insert placeholder records.
+If Polymarket or MongoDB is unavailable, the command exits with `POLYMARKET_SYNC_FAILED` and does not insert placeholder records.
 
 ## Trade Signals
 
@@ -174,13 +170,13 @@ curl http://localhost:3000/trader-profiles/:id/stats
 
 This demo flow uses real local records created through the API. Replace every placeholder with a real local operator value. Do not seed fake users, fake traders, fake markets, fake positions, or fake trade history.
 
-Start PostgreSQL, apply migrations, and run the API:
+Connect MongoDB, sync the schema, and run the API:
 
 ```sh
 npm install
 cp .env.example .env
 npm run db:generate
-npm run db:deploy
+npm run db:push
 npm run dev
 ```
 
@@ -281,7 +277,7 @@ Demo script:
 
 ## Structure
 
-- `prisma` keeps the database schema and migrations.
+- `prisma` keeps the MongoDB Prisma schema.
 - `src/config` keeps environment validation and runtime config.
 - `src/routes` keeps HTTP route modules.
 - `src/services` is reserved for service modules.

@@ -126,6 +126,18 @@ export function normalizeMarket(market: Market): NormalizedMarket {
 async function upsertProviderMarket(providerMarket: ProviderMarketInput) {
   const syncedAt = new Date();
 
+  const marketData = {
+    ...providerMarket,
+    orderBookEnabled: providerMarket.orderBookEnabled ?? false,
+    acceptingOrders: providerMarket.acceptingOrders ?? false,
+    orderPriceMinTickSize: normalizeOptionalDecimalString(providerMarket.orderPriceMinTickSize),
+    orderMinSize: normalizeOptionalDecimalString(providerMarket.orderMinSize),
+    lastTradePrice: normalizeOptionalDecimalString(providerMarket.lastTradePrice),
+    bestBid: normalizeOptionalDecimalString(providerMarket.bestBid),
+    bestAsk: normalizeOptionalDecimalString(providerMarket.bestAsk),
+    syncedAt,
+  };
+
   return prisma.market.upsert({
     where: {
       source_externalMarketId: {
@@ -133,17 +145,17 @@ async function upsertProviderMarket(providerMarket: ProviderMarketInput) {
         externalMarketId: providerMarket.externalMarketId,
       },
     },
-    create: {
-      ...providerMarket,
-      orderBookEnabled: providerMarket.orderBookEnabled ?? false,
-      acceptingOrders: providerMarket.acceptingOrders ?? false,
-      syncedAt,
-    },
-    update: {
-      ...providerMarket,
-      orderBookEnabled: providerMarket.orderBookEnabled ?? false,
-      acceptingOrders: providerMarket.acceptingOrders ?? false,
-      syncedAt,
-    },
+    create: marketData,
+    update: marketData,
   });
+}
+
+function normalizeOptionalDecimalString(value: string | number | null | undefined) {
+  if (value === null || typeof value === "undefined") {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+
+  return normalized.length > 0 ? normalized : null;
 }
