@@ -38,6 +38,43 @@ npm run db:push
 
 Prisma Migrate is not used for this MongoDB setup. Numeric trading values are stored as validated decimal strings so the API does not lose precision through floating point storage.
 
+## Vercel Deployment
+
+The API uses the Vercel Fastify runtime from `src/index.ts`. Production needs a real MongoDB connection string before deployment; do not deploy with a placeholder database URL for beta testing.
+
+Required Vercel environment variables:
+
+```sh
+DATABASE_URL=mongodb+srv://<username>:<password>@<cluster-url>/conviction_markets?retryWrites=true&w=majority
+NODE_ENV=production
+LOG_LEVEL=info
+POLYMARKET_GAMMA_API_URL=https://gamma-api.polymarket.com
+POLYMARKET_MARKETS_SYNC_LIMIT=50
+```
+
+Deployment checklist:
+
+```sh
+vercel link --yes --project conviction-core-api
+vercel env add DATABASE_URL production
+vercel env add NODE_ENV production
+vercel env add LOG_LEVEL production
+vercel env add POLYMARKET_GAMMA_API_URL production
+vercel env add POLYMARKET_MARKETS_SYNC_LIMIT production
+npm run db:generate
+npm run build
+npm run lint
+vercel --prod
+```
+
+After deployment, verify the public API:
+
+```sh
+curl https://<core-api-vercel-url>/health
+```
+
+Run `npm run db:push` against the same MongoDB deployment before beta testing routes that write records.
+
 ## HTTP
 
 - `GET /health` returns API health status.
