@@ -43,7 +43,7 @@ Prisma Migrate is not used for this MongoDB setup. Numeric trading values are st
 
 ## Vercel Deployment
 
-The API uses `api/index.ts` as the Vercel serverless entry and routes every public request to the Fastify app from `src/app.ts`. Local development still uses `src/index.ts` and `app.listen()`. The Vercel build command runs Prisma client generation before TypeScript so cached builds use the current schema.
+The API uses `api/index.ts` as the Vercel serverless entry and routes every public request to the Fastify app from `src/app.ts`. Local development still uses `src/index.ts` and `app.listen()`. The Vercel install command includes dev dependencies for build-time TypeScript checks, and the build command runs Prisma client generation before TypeScript so cached builds use the current schema.
 
 Production needs a real MongoDB connection string before deployment; `mongodb://127.0.0.1:27017/...` is only for local development and will not be reachable from Vercel.
 
