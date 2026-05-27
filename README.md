@@ -43,7 +43,9 @@ Prisma Migrate is not used for this MongoDB setup. Numeric trading values are st
 
 ## Vercel Deployment
 
-The API uses the Vercel Fastify runtime from `src/index.ts`. Production needs a real MongoDB connection string before deployment; `mongodb://127.0.0.1:27017/...` is only for local development and will not be reachable from Vercel.
+The API uses `api/index.ts` as the Vercel serverless entry and routes every public request to the Fastify app from `src/app.ts`. Local development still uses `src/index.ts` and `app.listen()`. The Vercel build command runs Prisma client generation before TypeScript so cached builds use the current schema.
+
+Production needs a real MongoDB connection string before deployment; `mongodb://127.0.0.1:27017/...` is only for local development and will not be reachable from Vercel.
 
 Required Vercel environment variables:
 
@@ -70,13 +72,14 @@ npm run lint
 vercel --prod
 ```
 
-After deployment, verify the public API:
+Run `npm run db:push` against the same production MongoDB database before beta testing writes. Then verify the public API is reachable without a Vercel login or bypass token:
 
 ```sh
 curl https://<core-api-vercel-url>/health
+curl https://<core-api-vercel-url>/markets
 ```
 
-Run `npm run db:push` against the same MongoDB deployment before beta testing routes that write records.
+If Vercel returns an authentication page, disable deployment protection for the public beta environment before wiring the URL into the Farcaster app. Farcaster clients cannot call a protected core API.
 
 ## HTTP
 
