@@ -9,6 +9,7 @@ import {
   getPositionById,
   listPositionCopyTrades,
   listTraderProfilePositions,
+  listUserCopyTrades,
   listUserPositions,
 } from "../services/positions.js";
 
@@ -158,6 +159,20 @@ export async function registerPositionRoutes(app: FastifyInstance) {
       const copyTrade = await createCopyTrade(request.body);
 
       return sendSuccess(reply, { copyTrade }, 201);
+    },
+  );
+
+  app.get<{ Params: UserPositionsParams }>(
+    "/users/:userId/copy-trades",
+    {
+      schema: {
+        params: idParamsSchema("userId"),
+      },
+    },
+    async (request, reply) => {
+      const copyTrades = await listUserCopyTrades(request.params.userId);
+
+      return sendSuccess(reply, { copyTrades });
     },
   );
 

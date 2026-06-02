@@ -9,10 +9,7 @@ import {
 
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
-import {
-  isSupportedExecutionIntentChain,
-  MAX_PENDING_MARGIN_LEVERAGE,
-} from "./execution.js";
+import { isSupportedExecutionIntentChain, MAX_PENDING_MARGIN_LEVERAGE } from "./execution.js";
 
 const decimalInputPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/;
 const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
@@ -253,6 +250,24 @@ export async function createCopyTrade(input: CreateCopyTradeInput) {
   });
 
   return normalizeCopyTrade(copyTrade);
+}
+
+export async function listUserCopyTrades(userId: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+
+  if (!user) {
+    throw new AppError("User not found", {
+      code: "USER_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  const copyTrades = await prisma.copyTrade.findMany({
+    where: { followerId: userId },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return copyTrades.map(normalizeCopyTrade);
 }
 
 export async function listPositionCopyTrades(positionId: string) {
