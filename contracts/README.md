@@ -7,15 +7,16 @@ Foundry contracts for the Conviction Markets margin layer live inside the core A
 This is a contract foundation, not a live execution system.
 
 - `ConvictionVault` accepts supported ERC20 collateral deposits.
-- Owner-managed collateral policies define whether a token is enabled, its max leverage, and its max single-intent collateral.
+- Owner-managed collateral policies define whether a token is enabled, its max leverage, max single-intent collateral, maintenance margin, account borrow limit, and account exposure limit.
 - Users can create margin intents against an off-chain synced market id.
-- Collateral is locked while an intent is pending.
+- Collateral is locked while an intent is pending or executed. The vault tracks borrowed notional, exposure notional, and health in basis points for each account/collateral pair.
 - Users or authorized operators can cancel pending intents.
 - The owner can pause new deposits, new intents, and execution marking during incident response while still allowing withdrawals and cancellations.
 - The owner can emergency-cancel pending intents and unlock collateral.
 - Authorized operators can mark an intent failed and unlock collateral.
 - Authorized operators can mark an intent executed only after a real adapter confirms execution.
 - `IConvictionExecutionAdapter` defines the future adapter boundary; venue-specific execution must stay outside the vault.
+- Risk accounting is based on submitted intent collateral and leverage. It is not PnL and does not prove a market order filled.
 
 The core API must continue to report `marginExecutionEnabled=false` until real contracts are deployed, funded, monitored, and wired to execution adapters.
 
@@ -42,7 +43,7 @@ Do not reuse development private keys in production.
 ## Next Contract Work
 
 - Add adapter contracts for real prediction-market venues.
-- Add liquidation-health accounting before enabling leverage.
+- Add liquidation and close-position flows before enabling live leverage.
 - Add oracle/price-source validation for collateral and market exposure.
 - Add role handoff to multisig-controlled ownership before public funds.
 - Add audit-focused tests and invariant tests before mainnet deployment.

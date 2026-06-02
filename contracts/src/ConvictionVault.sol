@@ -17,10 +17,18 @@ contract ConvictionVault {
         FAILED
     }
 
+    struct AccountRisk {
+        uint256 borrowedNotional;
+        uint256 exposureNotional;
+    }
+
     struct CollateralPolicy {
         bool enabled;
         uint256 maxLeverageBps;
         uint256 maxIntentCollateral;
+        uint256 maintenanceMarginBps;
+        uint256 maxAccountBorrowed;
+        uint256 maxAccountExposure;
     }
 
     struct MarginIntent {
@@ -34,10 +42,14 @@ contract ConvictionVault {
         uint256 maxSlippageBps;
         uint256 deadline;
         uint256 createdAt;
+        uint256 notionalAmount;
+        uint256 borrowedAmount;
+        uint256 maintenanceMarginBps;
         IntentStatus status;
     }
 
     uint256 public constant BPS = 10_000;
+    uint256 public constant DEFAULT_MAINTENANCE_MARGIN_BPS = 1_000;
     uint256 public constant MAX_LEVERAGE_BPS = 100_000;
     uint256 public constant MAX_SLIPPAGE_BPS = 2_000;
 
@@ -52,6 +64,8 @@ contract ConvictionVault {
         availableBalance;
     mapping(address account => mapping(address collateralToken => uint256 amount)) public
         lockedBalance;
+    mapping(address account => mapping(address collateralToken => AccountRisk risk)) public
+        accountRisk;
     mapping(bytes32 intentId => MarginIntent intent) public marginIntents;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
@@ -61,11 +75,21 @@ contract ConvictionVault {
         address indexed collateralToken,
         bool enabled,
         uint256 maxLeverageBps,
-        uint256 maxIntentCollateral
+        uint256 maxIntentCollateral,
+        uint256 maintenanceMarginBps,
+        uint256 maxAccountBorrowed,
+        uint256 maxAccountExposure
     );
     event OperatorUpdated(address indexed operator, bool enabled);
     event Deposited(address indexed account, address indexed collateralToken, uint256 amount);
     event Withdrawn(address indexed account, address indexed collateralToken, uint256 amount);
+    event AccountRiskUpdated(
+        address indexed account,
+        address indexed collateralToken,
+        uint256 borrowedNotional,
+        uint256 exposureNotional,
+        uint256 healthBps
+    );
     event MarginIntentCreated(
         bytes32 indexed intentId,
         address indexed account,
@@ -74,7 +98,9 @@ contract ConvictionVault {
         Side side,
         address collateralToken,
         uint256 collateralAmount,
-        uint256 leverageBps
+        uint256 leverageBps,
+        uint256 notionalAmount,
+        uint256 borrowedAmount
     );
     event MarginIntentCancelled(bytes32 indexed intentId, address indexed account);
     event MarginIntentEmergencyCancelled(
@@ -87,6 +113,9 @@ contract ConvictionVault {
         bytes32 indexed intentId, address indexed operator, bytes32 executionRef
     );
 
+    error AccountBorrowLimitExceeded();
+    error AccountExposureLimitExceeded();
+    error AccountHealthTooLow();
     error AmountRequired();
     error CollateralLimitExceeded();
     error CollateralNotSupported(address collateralToken);
@@ -95,6 +124,7 @@ contract ConvictionVault {
     error InvalidAddress();
     error InvalidIntentStatus();
     error InvalidLeverage();
+    error InvalidMarginRequirement();
     error InvalidReference();
     error InvalidSlippage();
     error NotAuthorized();
@@ -143,14 +173,25 @@ contract ConvictionVault {
     }
 
     function setCollateralSupport(address collateralToken, bool enabled) external onlyOwner {
-        setCollateralPolicy(collateralToken, enabled, MAX_LEVERAGE_BPS, type(uint256).max);
+        setCollateralPolicy(
+            collateralToken,
+            enabled,
+            MAX_LEVERAGE_BPS,
+            type(uint256).max,
+            DEFAULT_MAINTENANCE_MARGIN_BPS,
+            type(uint256).max,
+            type(uint256).max
+        );
     }
 
     function setCollateralPolicy(
         address collateralToken,
         bool enabled,
         uint256 maxLeverageBps,
-        uint256 maxIntentCollateral
+        uint256 maxIntentCollateral,
+        uint256 maintenanceMarginBps,
+        uint256 maxAccountBorrowed,
+        uint256 maxAccountExposure
     ) public onlyOwner {
         if (collateralToken == address(0)) revert InvalidAddress();
 
@@ -159,16 +200,30 @@ contract ConvictionVault {
                 revert InvalidLeverage();
             }
             if (maxIntentCollateral == 0) revert AmountRequired();
+            if (maintenanceMarginBps == 0 || maintenanceMarginBps > BPS) {
+                revert InvalidMarginRequirement();
+            }
         }
 
         collateralPolicies[collateralToken] = CollateralPolicy({
             enabled: enabled,
             maxLeverageBps: maxLeverageBps,
-            maxIntentCollateral: maxIntentCollateral
+            maxIntentCollateral: maxIntentCollateral,
+            maintenanceMarginBps: maintenanceMarginBps,
+            maxAccountBorrowed: maxAccountBorrowed,
+            maxAccountExposure: maxAccountExposure
         });
 
         emit CollateralSupportUpdated(collateralToken, enabled);
-        emit CollateralPolicyUpdated(collateralToken, enabled, maxLeverageBps, maxIntentCollateral);
+        emit CollateralPolicyUpdated(
+            collateralToken,
+            enabled,
+            maxLeverageBps,
+            maxIntentCollateral,
+            maintenanceMarginBps,
+            maxAccountBorrowed,
+            maxAccountExposure
+        );
     }
 
     function setOperator(address operator, bool enabled) external onlyOwner {
@@ -221,8 +276,15 @@ contract ConvictionVault {
         uint256 available = availableBalance[msg.sender][collateralToken];
         if (available < collateralAmount) revert InsufficientAvailableBalance();
 
+        (uint256 notionalAmount, uint256 borrowedAmount) =
+            calculateIntentAmounts(collateralAmount, leverageBps);
+        _validateNextAccountRisk(
+            msg.sender, collateralToken, collateralAmount, borrowedAmount, notionalAmount, policy
+        );
+
         availableBalance[msg.sender][collateralToken] = available - collateralAmount;
         lockedBalance[msg.sender][collateralToken] += collateralAmount;
+        _addAccountRisk(msg.sender, collateralToken, borrowedAmount, notionalAmount);
 
         intentId = keccak256(
             abi.encodePacked(
@@ -247,6 +309,9 @@ contract ConvictionVault {
             maxSlippageBps: maxSlippageBps,
             deadline: deadline,
             createdAt: block.timestamp,
+            notionalAmount: notionalAmount,
+            borrowedAmount: borrowedAmount,
+            maintenanceMarginBps: policy.maintenanceMarginBps,
             status: IntentStatus.PENDING
         });
 
@@ -258,7 +323,9 @@ contract ConvictionVault {
             side,
             collateralToken,
             collateralAmount,
-            leverageBps
+            leverageBps,
+            notionalAmount,
+            borrowedAmount
         );
     }
 
@@ -269,7 +336,7 @@ contract ConvictionVault {
             revert NotAuthorized();
         }
 
-        _unlockCollateral(intent);
+        _releaseMarginIntent(intent);
         intent.status = IntentStatus.CANCELLED;
 
         emit MarginIntentCancelled(intentId, intent.account);
@@ -283,7 +350,7 @@ contract ConvictionVault {
         MarginIntent storage intent = marginIntents[intentId];
         if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
 
-        _unlockCollateral(intent);
+        _releaseMarginIntent(intent);
         intent.status = IntentStatus.CANCELLED;
 
         emit MarginIntentEmergencyCancelled(intentId, intent.account, reasonCode);
@@ -297,7 +364,7 @@ contract ConvictionVault {
         MarginIntent storage intent = marginIntents[intentId];
         if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
 
-        _unlockCollateral(intent);
+        _releaseMarginIntent(intent);
         intent.status = IntentStatus.FAILED;
 
         emit MarginIntentFailed(intentId, msg.sender, reasonCode);
@@ -317,12 +384,130 @@ contract ConvictionVault {
         emit MarginIntentExecuted(intentId, msg.sender, executionRef);
     }
 
+    function calculateIntentAmounts(uint256 collateralAmount, uint256 leverageBps)
+        public
+        pure
+        returns (uint256 notionalAmount, uint256 borrowedAmount)
+    {
+        if (collateralAmount == 0) revert AmountRequired();
+        if (leverageBps < BPS || leverageBps > MAX_LEVERAGE_BPS) revert InvalidLeverage();
+
+        notionalAmount = collateralAmount * leverageBps / BPS;
+        borrowedAmount = notionalAmount - collateralAmount;
+    }
+
     function getAccountCollateral(address account, address collateralToken)
         external
         view
         returns (uint256 available, uint256 lockedAmount)
     {
         return (availableBalance[account][collateralToken], lockedBalance[account][collateralToken]);
+    }
+
+    function getAccountMarginState(address account, address collateralToken)
+        external
+        view
+        returns (
+            uint256 available,
+            uint256 lockedAmount,
+            uint256 borrowedNotional,
+            uint256 exposureNotional,
+            uint256 healthBps,
+            bool belowMaintenance
+        )
+    {
+        AccountRisk memory risk = accountRisk[account][collateralToken];
+        uint256 lockedAmount_ = lockedBalance[account][collateralToken];
+        uint256 healthBps_ = _calculateHealthBps(lockedAmount_, risk.exposureNotional);
+        CollateralPolicy memory policy = collateralPolicies[collateralToken];
+
+        return (
+            availableBalance[account][collateralToken],
+            lockedAmount_,
+            risk.borrowedNotional,
+            risk.exposureNotional,
+            healthBps_,
+            risk.exposureNotional > 0 && policy.enabled && healthBps_ < policy.maintenanceMarginBps
+        );
+    }
+
+    function getAccountHealthBps(address account, address collateralToken)
+        external
+        view
+        returns (uint256)
+    {
+        return _calculateHealthBps(
+            lockedBalance[account][collateralToken],
+            accountRisk[account][collateralToken].exposureNotional
+        );
+    }
+
+    function _validateNextAccountRisk(
+        address account,
+        address collateralToken,
+        uint256 collateralAmount,
+        uint256 borrowedAmount,
+        uint256 notionalAmount,
+        CollateralPolicy memory policy
+    ) private view {
+        AccountRisk memory currentRisk = accountRisk[account][collateralToken];
+        uint256 nextBorrowed = currentRisk.borrowedNotional + borrowedAmount;
+        uint256 nextExposure = currentRisk.exposureNotional + notionalAmount;
+        uint256 nextLocked = lockedBalance[account][collateralToken] + collateralAmount;
+
+        if (nextBorrowed > policy.maxAccountBorrowed) revert AccountBorrowLimitExceeded();
+        if (nextExposure > policy.maxAccountExposure) revert AccountExposureLimitExceeded();
+        if (_calculateHealthBps(nextLocked, nextExposure) < policy.maintenanceMarginBps) {
+            revert AccountHealthTooLow();
+        }
+    }
+
+    function _addAccountRisk(
+        address account,
+        address collateralToken,
+        uint256 borrowedAmount,
+        uint256 notionalAmount
+    ) private {
+        AccountRisk storage risk = accountRisk[account][collateralToken];
+        risk.borrowedNotional += borrowedAmount;
+        risk.exposureNotional += notionalAmount;
+
+        emit AccountRiskUpdated(
+            account,
+            collateralToken,
+            risk.borrowedNotional,
+            risk.exposureNotional,
+            _calculateHealthBps(lockedBalance[account][collateralToken], risk.exposureNotional)
+        );
+    }
+
+    function _removeAccountRisk(
+        address account,
+        address collateralToken,
+        uint256 borrowedAmount,
+        uint256 notionalAmount
+    ) private {
+        AccountRisk storage risk = accountRisk[account][collateralToken];
+        risk.borrowedNotional -= borrowedAmount;
+        risk.exposureNotional -= notionalAmount;
+
+        emit AccountRiskUpdated(
+            account,
+            collateralToken,
+            risk.borrowedNotional,
+            risk.exposureNotional,
+            _calculateHealthBps(lockedBalance[account][collateralToken], risk.exposureNotional)
+        );
+    }
+
+    function _calculateHealthBps(uint256 collateralAmount, uint256 exposureAmount)
+        private
+        pure
+        returns (uint256)
+    {
+        if (exposureAmount == 0) return type(uint256).max;
+
+        return collateralAmount * BPS / exposureAmount;
     }
 
     function _checkNotPaused() private view {
@@ -355,9 +540,12 @@ contract ConvictionVault {
         if (!policy.enabled) revert CollateralNotSupported(collateralToken);
     }
 
-    function _unlockCollateral(MarginIntent storage intent) private {
+    function _releaseMarginIntent(MarginIntent storage intent) private {
         lockedBalance[intent.account][intent.collateralToken] -= intent.collateralAmount;
         availableBalance[intent.account][intent.collateralToken] += intent.collateralAmount;
+        _removeAccountRisk(
+            intent.account, intent.collateralToken, intent.borrowedAmount, intent.notionalAmount
+        );
     }
 
     function _safeTransfer(address collateralToken, address to, uint256 amount) private {
