@@ -17,6 +17,12 @@ contract ConvictionVault {
         FAILED
     }
 
+    struct CollateralPolicy {
+        bool enabled;
+        uint256 maxLeverageBps;
+        uint256 maxIntentCollateral;
+    }
+
     struct MarginIntent {
         address account;
         address collateralToken;
@@ -37,9 +43,10 @@ contract ConvictionVault {
 
     address public owner;
     uint256 public nextIntentNonce;
+    bool public paused;
     bool private locked;
 
-    mapping(address collateralToken => bool enabled) public supportedCollateral;
+    mapping(address collateralToken => CollateralPolicy policy) public collateralPolicies;
     mapping(address operator => bool enabled) public authorizedOperators;
     mapping(address account => mapping(address collateralToken => uint256 amount)) public
         availableBalance;
@@ -48,7 +55,14 @@ contract ConvictionVault {
     mapping(bytes32 intentId => MarginIntent intent) public marginIntents;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event PauseStatusUpdated(bool paused);
     event CollateralSupportUpdated(address indexed collateralToken, bool enabled);
+    event CollateralPolicyUpdated(
+        address indexed collateralToken,
+        bool enabled,
+        uint256 maxLeverageBps,
+        uint256 maxIntentCollateral
+    );
     event OperatorUpdated(address indexed operator, bool enabled);
     event Deposited(address indexed account, address indexed collateralToken, uint256 amount);
     event Withdrawn(address indexed account, address indexed collateralToken, uint256 amount);
@@ -63,6 +77,9 @@ contract ConvictionVault {
         uint256 leverageBps
     );
     event MarginIntentCancelled(bytes32 indexed intentId, address indexed account);
+    event MarginIntentEmergencyCancelled(
+        bytes32 indexed intentId, address indexed account, bytes32 reasonCode
+    );
     event MarginIntentFailed(
         bytes32 indexed intentId, address indexed operator, bytes32 reasonCode
     );
@@ -71,6 +88,7 @@ contract ConvictionVault {
     );
 
     error AmountRequired();
+    error CollateralLimitExceeded();
     error CollateralNotSupported(address collateralToken);
     error DeadlineExpired();
     error InsufficientAvailableBalance();
@@ -82,6 +100,7 @@ contract ConvictionVault {
     error NotAuthorized();
     error ReentrantCall();
     error TransferFailed();
+    error VaultPaused();
 
     modifier onlyOwner() {
         _checkOwner();
@@ -99,6 +118,11 @@ contract ConvictionVault {
         _nonReentrantAfter();
     }
 
+    modifier whenNotPaused() {
+        _checkNotPaused();
+        _;
+    }
+
     constructor(address initialOwner) {
         if (initialOwner == address(0)) revert InvalidAddress();
 
@@ -113,11 +137,38 @@ contract ConvictionVault {
         owner = newOwner;
     }
 
+    function setPaused(bool nextPaused) external onlyOwner {
+        paused = nextPaused;
+        emit PauseStatusUpdated(nextPaused);
+    }
+
     function setCollateralSupport(address collateralToken, bool enabled) external onlyOwner {
+        setCollateralPolicy(collateralToken, enabled, MAX_LEVERAGE_BPS, type(uint256).max);
+    }
+
+    function setCollateralPolicy(
+        address collateralToken,
+        bool enabled,
+        uint256 maxLeverageBps,
+        uint256 maxIntentCollateral
+    ) public onlyOwner {
         if (collateralToken == address(0)) revert InvalidAddress();
 
-        supportedCollateral[collateralToken] = enabled;
+        if (enabled) {
+            if (maxLeverageBps < BPS || maxLeverageBps > MAX_LEVERAGE_BPS) {
+                revert InvalidLeverage();
+            }
+            if (maxIntentCollateral == 0) revert AmountRequired();
+        }
+
+        collateralPolicies[collateralToken] = CollateralPolicy({
+            enabled: enabled,
+            maxLeverageBps: maxLeverageBps,
+            maxIntentCollateral: maxIntentCollateral
+        });
+
         emit CollateralSupportUpdated(collateralToken, enabled);
+        emit CollateralPolicyUpdated(collateralToken, enabled, maxLeverageBps, maxIntentCollateral);
     }
 
     function setOperator(address operator, bool enabled) external onlyOwner {
@@ -127,7 +178,7 @@ contract ConvictionVault {
         emit OperatorUpdated(operator, enabled);
     }
 
-    function deposit(address collateralToken, uint256 amount) external nonReentrant {
+    function deposit(address collateralToken, uint256 amount) external nonReentrant whenNotPaused {
         _requireSupportedCollateral(collateralToken);
         if (amount == 0) revert AmountRequired();
 
@@ -158,11 +209,12 @@ contract ConvictionVault {
         uint256 maxSlippageBps,
         uint256 deadline,
         bytes32 offchainPositionId
-    ) external nonReentrant returns (bytes32 intentId) {
-        _requireSupportedCollateral(collateralToken);
+    ) external nonReentrant whenNotPaused returns (bytes32 intentId) {
+        CollateralPolicy memory policy = _requireSupportedCollateral(collateralToken);
         if (marketId == bytes32(0) || offchainPositionId == bytes32(0)) revert InvalidReference();
         if (collateralAmount == 0) revert AmountRequired();
-        if (leverageBps < BPS || leverageBps > MAX_LEVERAGE_BPS) revert InvalidLeverage();
+        if (leverageBps < BPS || leverageBps > policy.maxLeverageBps) revert InvalidLeverage();
+        if (collateralAmount > policy.maxIntentCollateral) revert CollateralLimitExceeded();
         if (maxSlippageBps > MAX_SLIPPAGE_BPS) revert InvalidSlippage();
         if (deadline <= block.timestamp) revert DeadlineExpired();
 
@@ -223,6 +275,20 @@ contract ConvictionVault {
         emit MarginIntentCancelled(intentId, intent.account);
     }
 
+    function emergencyCancelMarginIntent(bytes32 intentId, bytes32 reasonCode)
+        external
+        onlyOwner
+        nonReentrant
+    {
+        MarginIntent storage intent = marginIntents[intentId];
+        if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
+
+        _unlockCollateral(intent);
+        intent.status = IntentStatus.CANCELLED;
+
+        emit MarginIntentEmergencyCancelled(intentId, intent.account, reasonCode);
+    }
+
     function markMarginIntentFailed(bytes32 intentId, bytes32 reasonCode)
         external
         onlyOperator
@@ -241,6 +307,7 @@ contract ConvictionVault {
         external
         onlyOperator
         nonReentrant
+        whenNotPaused
     {
         MarginIntent storage intent = marginIntents[intentId];
         if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
@@ -248,6 +315,18 @@ contract ConvictionVault {
         intent.status = IntentStatus.EXECUTED;
 
         emit MarginIntentExecuted(intentId, msg.sender, executionRef);
+    }
+
+    function getAccountCollateral(address account, address collateralToken)
+        external
+        view
+        returns (uint256 available, uint256 lockedAmount)
+    {
+        return (availableBalance[account][collateralToken], lockedBalance[account][collateralToken]);
+    }
+
+    function _checkNotPaused() private view {
+        if (paused) revert VaultPaused();
     }
 
     function _checkOwner() private view {
@@ -267,8 +346,13 @@ contract ConvictionVault {
         locked = false;
     }
 
-    function _requireSupportedCollateral(address collateralToken) private view {
-        if (!supportedCollateral[collateralToken]) revert CollateralNotSupported(collateralToken);
+    function _requireSupportedCollateral(address collateralToken)
+        private
+        view
+        returns (CollateralPolicy memory policy)
+    {
+        policy = collateralPolicies[collateralToken];
+        if (!policy.enabled) revert CollateralNotSupported(collateralToken);
     }
 
     function _unlockCollateral(MarginIntent storage intent) private {

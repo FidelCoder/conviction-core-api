@@ -48,13 +48,7 @@ contract ConvictionVaultTest {
     }
 
     function testDepositAndWithdraw() public {
-        token.mint(address(this), 100 ether);
-        token.approve(address(vault), 100 ether);
-
-        vault.deposit(address(token), 100 ether);
-        require(
-            vault.availableBalance(address(this), address(token)) == 100 ether, "deposit failed"
-        );
+        _fundAndDeposit(100 ether);
 
         vault.withdraw(address(token), 40 ether);
         require(
@@ -64,20 +58,9 @@ contract ConvictionVaultTest {
     }
 
     function testCreateAndCancelMarginIntentLocksCollateral() public {
-        token.mint(address(this), 100 ether);
-        token.approve(address(vault), 100 ether);
-        vault.deposit(address(token), 100 ether);
+        _fundAndDeposit(100 ether);
 
-        bytes32 intentId = vault.createMarginIntent(
-            address(token),
-            keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
-            25 ether,
-            30_000,
-            100,
-            block.timestamp + 1 days,
-            keccak256("core-position-id")
-        );
+        bytes32 intentId = _createIntent(25 ether, 30_000, block.timestamp + 1 days);
 
         require(vault.availableBalance(address(this), address(token)) == 75 ether, "not locked");
         require(vault.lockedBalance(address(this), address(token)) == 25 ether, "lock missing");
@@ -103,25 +86,206 @@ contract ConvictionVaultTest {
     }
 
     function testOperatorCanFailPendingIntentAndUnlockCollateral() public {
-        token.mint(address(this), 100 ether);
-        token.approve(address(vault), 100 ether);
-        vault.deposit(address(token), 100 ether);
+        _fundAndDeposit(100 ether);
         vault.setOperator(address(this), true);
 
-        bytes32 intentId = vault.createMarginIntent(
-            address(token),
-            keccak256("polymarket-market-id"),
-            ConvictionVault.Side.NO,
-            10 ether,
-            20_000,
-            50,
-            block.timestamp + 1 days,
-            keccak256("core-position-id")
-        );
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
 
         vault.markMarginIntentFailed(intentId, keccak256("ADAPTER_UNAVAILABLE"));
 
         require(vault.availableBalance(address(this), address(token)) == 100 ether, "not unlocked");
         require(vault.lockedBalance(address(this), address(token)) == 0, "lock remains");
+    }
+
+    function testPauseBlocksDepositsAndNewIntentsButAllowsWithdrawAndCancel() public {
+        _fundAndDeposit(100 ether);
+        bytes32 intentId = _createIntent(20 ether, 20_000, block.timestamp + 1 days);
+        vault.setPaused(true);
+
+        token.mint(address(this), 10 ether);
+        token.approve(address(vault), 10 ether);
+
+        bool depositReverted;
+        try vault.deposit(address(token), 10 ether) { }
+        catch {
+            depositReverted = true;
+        }
+        require(depositReverted, "paused deposit accepted");
+
+        bool intentReverted;
+        try vault.createMarginIntent(
+            address(token),
+            keccak256("another-market-id"),
+            ConvictionVault.Side.NO,
+            10 ether,
+            20_000,
+            100,
+            block.timestamp + 1 days,
+            keccak256("another-position-id")
+        ) { }
+        catch {
+            intentReverted = true;
+        }
+        require(intentReverted, "paused intent accepted");
+
+        vault.withdraw(address(token), 30 ether);
+        vault.cancelMarginIntent(intentId);
+
+        require(vault.availableBalance(address(this), address(token)) == 70 ether, "exit blocked");
+        require(vault.lockedBalance(address(this), address(token)) == 0, "locked after cancel");
+    }
+
+    function testOwnerCanEmergencyCancelPendingIntent() public {
+        _fundAndDeposit(100 ether);
+        bytes32 intentId = _createIntent(15 ether, 20_000, block.timestamp + 1 days);
+
+        vault.emergencyCancelMarginIntent(intentId, keccak256("INCIDENT_RESPONSE"));
+
+        require(vault.availableBalance(address(this), address(token)) == 100 ether, "not unlocked");
+        require(vault.lockedBalance(address(this), address(token)) == 0, "lock remains");
+    }
+
+    function testCollateralPolicyRejectsExcessLeverage() public {
+        vault.setCollateralPolicy(address(token), true, 20_000, 100 ether);
+        _fundAndDeposit(100 ether);
+
+        bool reverted;
+        try vault.createMarginIntent(
+            address(token),
+            keccak256("polymarket-market-id"),
+            ConvictionVault.Side.YES,
+            10 ether,
+            30_000,
+            100,
+            block.timestamp + 1 days,
+            keccak256("core-position-id")
+        ) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "excess leverage accepted");
+    }
+
+    function testCollateralPolicyRejectsOversizedIntent() public {
+        vault.setCollateralPolicy(address(token), true, 30_000, 10 ether);
+        _fundAndDeposit(100 ether);
+
+        bool reverted;
+        try vault.createMarginIntent(
+            address(token),
+            keccak256("polymarket-market-id"),
+            ConvictionVault.Side.YES,
+            11 ether,
+            20_000,
+            100,
+            block.timestamp + 1 days,
+            keccak256("core-position-id")
+        ) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "oversized collateral accepted");
+    }
+
+    function testRejectExpiredDeadline() public {
+        _fundAndDeposit(100 ether);
+
+        bool reverted;
+        try vault.createMarginIntent(
+            address(token),
+            keccak256("polymarket-market-id"),
+            ConvictionVault.Side.YES,
+            10 ether,
+            20_000,
+            100,
+            block.timestamp,
+            keccak256("core-position-id")
+        ) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "expired deadline accepted");
+    }
+
+    function testOwnerIsNotOperatorByDefault() public {
+        _fundAndDeposit(100 ether);
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        bool reverted;
+        try vault.markMarginIntentExecuted(intentId, keccak256("execution-ref")) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "owner executed without operator role");
+    }
+
+    function testCannotTransitionIntentTwice() public {
+        _fundAndDeposit(100 ether);
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        vault.cancelMarginIntent(intentId);
+
+        bool reverted;
+        try vault.cancelMarginIntent(intentId) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "double transition accepted");
+    }
+
+    function testCannotWithdrawLockedCollateral() public {
+        _fundAndDeposit(100 ether);
+        _createIntent(90 ether, 20_000, block.timestamp + 1 days);
+
+        bool reverted;
+        try vault.withdraw(address(token), 100 ether) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "locked collateral withdrawn");
+    }
+
+    function testPausedVaultBlocksExecutionMarking() public {
+        _fundAndDeposit(100 ether);
+        vault.setOperator(address(this), true);
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+        vault.setPaused(true);
+
+        bool reverted;
+        try vault.markMarginIntentExecuted(intentId, keccak256("execution-ref")) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "paused execution accepted");
+    }
+
+    function _fundAndDeposit(uint256 amount) private {
+        token.mint(address(this), amount);
+        token.approve(address(vault), amount);
+        vault.deposit(address(token), amount);
+        require(vault.availableBalance(address(this), address(token)) >= amount, "deposit failed");
+    }
+
+    function _createIntent(uint256 collateralAmount, uint256 leverageBps, uint256 deadline)
+        private
+        returns (bytes32)
+    {
+        return vault.createMarginIntent(
+            address(token),
+            keccak256("polymarket-market-id"),
+            ConvictionVault.Side.YES,
+            collateralAmount,
+            leverageBps,
+            100,
+            deadline,
+            keccak256(abi.encodePacked("core-position-id", collateralAmount, leverageBps))
+        );
     }
 }

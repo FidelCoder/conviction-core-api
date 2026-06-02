@@ -188,7 +188,7 @@ This does not execute a trade, submit an order, create PnL, or mark a position a
 
 ## Contract Foundation
 
-Contracts live in `contracts/` inside this API repo. The first scaffold is `ConvictionVault`, an ERC20 collateral vault that records margin intents and locks collateral while the intent is pending. It supports owner-managed collateral allowlists and authorized operators for future real execution adapters.
+Contracts live in `contracts/` inside this API repo. The first scaffold is `ConvictionVault`, an ERC20 collateral vault that records margin intents and locks collateral while the intent is pending. It supports owner-managed collateral policies, pause controls, emergency cancellation, and authorized operators for future real execution adapters.
 
 This scaffold does not make margin execution live. The API must keep `marginExecutionEnabled=false` and `leverageEnabled=false` until contracts are deployed, funded with real liquidity, monitored, and connected to real execution adapters. Configuring `CONVICTION_VAULT_ADDRESS` or `CONVICTION_EXECUTION_ADAPTER_ADDRESS` only exposes deployment metadata in `GET /execution/capabilities`; it does not mark positions as executed.
 
@@ -210,7 +210,7 @@ BASE_MAINNET_RPC_URL=
 DEPLOYER_PRIVATE_KEY=
 ```
 
-Start with Base Sepolia for deployment tests. Do not use production funds or claim execution support until adapter confirmation, liquidation rules, and operational controls are implemented.
+Start with Base Sepolia for deployment tests. Do not use production funds or claim execution support until adapter confirmation, liquidation rules, collateral policy review, monitoring, and operational controls are implemented.
 
 ## Positions and Copy Intents
 
