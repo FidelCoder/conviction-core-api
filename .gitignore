@@ -6,3 +6,6 @@ coverage/
 !.env.example
 .vercel/
 npm-debug.log*
+contracts/out/
+contracts/cache/
+contracts/broadcast/
