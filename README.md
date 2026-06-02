@@ -100,6 +100,7 @@ If Vercel returns an authentication page, disable deployment protection for the 
 - `GET /users/:userId/positions` returns positions for one user.
 - `GET /trader-profiles/:traderProfileId/positions` returns positions for the user behind one trader profile.
 - `POST /copy-trades` creates a pending execution copy intent against an existing source position.
+- `GET /users/:userId/copy-trades` returns copy intents submitted by one follower user.
 - `GET /positions/:positionId/copy-trades` returns copy intents for one source position.
 - `GET /leaderboard` returns trader stats calculated from real database records.
 - `GET /trader-profiles/:id/stats` returns stats for one trader profile.
@@ -221,6 +222,7 @@ Read positions and copy intents:
 curl http://localhost:3000/positions/:id
 curl http://localhost:3000/users/:userId/positions
 curl http://localhost:3000/trader-profiles/:traderProfileId/positions
+curl http://localhost:3000/users/:userId/copy-trades
 curl http://localhost:3000/positions/:positionId/copy-trades
 ```
 
