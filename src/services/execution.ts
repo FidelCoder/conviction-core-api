@@ -1,6 +1,7 @@
 import type { ExecutionAttempt } from "@prisma/client";
 import { ExecutionAttemptStatus, ExecutionMode, ExecutionTargetType } from "@prisma/client";
 
+import { env } from "../config/env.js";
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 
@@ -40,6 +41,18 @@ export function getExecutionCapabilities() {
     leverageRequiresContracts: true,
     maxPendingMarginLeverage: MAX_PENDING_MARGIN_LEVERAGE,
     activeAdapters: [] as string[],
+    contractLayer: {
+      status: env.convictionVaultAddress ? "CONFIGURED_NOT_ENABLED" : "PLANNED",
+      vaultAddress: env.convictionVaultAddress,
+      executionAdapterAddress: env.convictionExecutionAdapterAddress,
+      marginVaultRequired: true,
+      contractRepoPath: "contracts/src/ConvictionVault.sol",
+      notes: [
+        "Contracts are scaffolded in this API repo.",
+        "Configured contract addresses do not enable execution by themselves.",
+        "Margin execution remains disabled until deployment, liquidity, monitoring, and adapters are live.",
+      ],
+    },
     recommendation:
       "Record real user intents now. Execute only after contracts, vault liquidity, liquidation rules, and provider adapters are live.",
     chains: supportedIntentChains,

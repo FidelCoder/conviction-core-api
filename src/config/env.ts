@@ -2,6 +2,14 @@ import "dotenv/config";
 
 import { z } from "zod";
 
+const optionalEvmAddress = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -10,6 +18,8 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   POLYMARKET_GAMMA_API_URL: z.string().url().default("https://gamma-api.polymarket.com"),
   POLYMARKET_MARKETS_SYNC_LIMIT: z.coerce.number().int().positive().max(500).default(50),
+  CONVICTION_VAULT_ADDRESS: optionalEvmAddress,
+  CONVICTION_EXECUTION_ADAPTER_ADDRESS: optionalEvmAddress,
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -28,4 +38,6 @@ export const env = {
   databaseUrl: parsedEnv.data.DATABASE_URL,
   polymarketGammaApiUrl: parsedEnv.data.POLYMARKET_GAMMA_API_URL,
   polymarketMarketsSyncLimit: parsedEnv.data.POLYMARKET_MARKETS_SYNC_LIMIT,
+  convictionVaultAddress: parsedEnv.data.CONVICTION_VAULT_ADDRESS ?? null,
+  convictionExecutionAdapterAddress: parsedEnv.data.CONVICTION_EXECUTION_ADAPTER_ADDRESS ?? null,
 };

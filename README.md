@@ -30,6 +30,9 @@ The API expects MongoDB. The default `.env.example` points to the local Docker M
 - `npm run db:push` syncs the Prisma schema to MongoDB. MongoDB does not use the old PostgreSQL migration files.
 - `npm run db:studio` opens Prisma Studio.
 - `npm run markets:sync:polymarket -- --limit=50` syncs real active Polymarket markets from Gamma.
+- `npm run contracts:build` compiles the Foundry contracts in `contracts/`.
+- `npm run contracts:test` runs the Foundry contract tests.
+- `npm run contracts:fmt` formats the contract sources.
 
 ## Database Schema
 
@@ -182,6 +185,32 @@ curl -X POST http://localhost:3000/execution/positions/:positionId/start
 ```
 
 This does not execute a trade, submit an order, create PnL, or mark a position as executed.
+
+## Contract Foundation
+
+Contracts live in `contracts/` inside this API repo. The first scaffold is `ConvictionVault`, an ERC20 collateral vault that records margin intents and locks collateral while the intent is pending. It supports owner-managed collateral policies, pause controls, emergency cancellation, and authorized operators for future real execution adapters.
+
+This scaffold does not make margin execution live. The API must keep `marginExecutionEnabled=false` and `leverageEnabled=false` until contracts are deployed, funded with real liquidity, monitored, and connected to real execution adapters. Configuring `CONVICTION_VAULT_ADDRESS` or `CONVICTION_EXECUTION_ADAPTER_ADDRESS` only exposes deployment metadata in `GET /execution/capabilities`; it does not mark positions as executed.
+
+Contract commands:
+
+```sh
+npm run contracts:build
+npm run contracts:test
+```
+
+Optional contract env values:
+
+```sh
+CONVICTION_VAULT_ADDRESS=
+CONVICTION_EXECUTION_ADAPTER_ADDRESS=
+CONVICTION_VAULT_OWNER=
+BASE_SEPOLIA_RPC_URL=
+BASE_MAINNET_RPC_URL=
+DEPLOYER_PRIVATE_KEY=
+```
+
+Start with Base Sepolia for deployment tests. Do not use production funds or claim execution support until adapter confirmation, liquidation rules, collateral policy review, monitoring, and operational controls are implemented.
 
 ## Positions and Copy Intents
 
