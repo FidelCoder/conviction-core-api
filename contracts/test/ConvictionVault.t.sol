@@ -3,6 +3,30 @@ pragma solidity ^0.8.28;
 
 import { ConvictionVault } from "../src/ConvictionVault.sol";
 
+contract AdapterCaller {
+    ConvictionVault private vault;
+
+    constructor(ConvictionVault vault_) {
+        vault = vault_;
+    }
+
+    function submit(bytes32 intentId, bytes32 externalRef) external {
+        vault.submitMarginIntent(intentId, externalRef);
+    }
+
+    function confirm(bytes32 intentId, bytes32 executionRef) external {
+        vault.confirmMarginIntent(intentId, executionRef);
+    }
+
+    function fail(bytes32 intentId, bytes32 reasonCode) external {
+        vault.failMarginIntent(intentId, reasonCode);
+    }
+
+    function cancelSubmitted(bytes32 intentId, bytes32 reasonCode) external {
+        vault.cancelSubmittedMarginIntent(intentId, reasonCode);
+    }
+}
+
 contract MockERC20 {
     string public name = "Mock USD";
     string public symbol = "mUSD";
@@ -109,10 +133,11 @@ contract ConvictionVaultTest {
 
     function testExecutedIntentKeepsMarginRiskLocked() public {
         _fundAndDeposit(100 ether);
-        vault.setOperator(address(this), true);
+        AdapterCaller adapter = _authorizedAdapter();
         bytes32 intentId = _createIntent(10 ether, 30_000, block.timestamp + 1 days);
 
-        vault.markMarginIntentExecuted(intentId, keccak256("execution-ref"));
+        adapter.submit(intentId, keccak256("external-ref"));
+        adapter.confirm(intentId, keccak256("execution-ref"));
 
         (, uint256 lockedAmount, uint256 borrowedNotional, uint256 exposureNotional,,) =
             vault.getAccountMarginState(address(this), address(token));
@@ -326,6 +351,157 @@ contract ConvictionVaultTest {
         require(borrowedAmount == 20 ether, "borrowed mismatch");
     }
 
+    function testUnauthorizedAdapterCannotSubmit() public {
+        _fundAndDeposit(100 ether);
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        bool reverted;
+        try vault.submitMarginIntent(intentId, keccak256("external-ref")) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "unauthorized adapter submitted");
+    }
+
+    function testAdapterSubmitAndConfirmFlow() public {
+        _fundAndDeposit(100 ether);
+        AdapterCaller adapter = _authorizedAdapter();
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        adapter.submit(intentId, keccak256("external-ref"));
+        adapter.confirm(intentId, keccak256("execution-ref"));
+
+        (, ConvictionVault.AdapterStatus adapterStatus,,,,) = vault.adapterRecords(intentId);
+        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+
+        require(adapterStatus == ConvictionVault.AdapterStatus.CONFIRMED, "not confirmed");
+        require(intentStatus == ConvictionVault.IntentStatus.EXECUTED, "not executed");
+    }
+
+    function testAdapterCannotConfirmTwice() public {
+        _fundAndDeposit(100 ether);
+        AdapterCaller adapter = _authorizedAdapter();
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        adapter.submit(intentId, keccak256("external-ref"));
+        adapter.confirm(intentId, keccak256("execution-ref"));
+
+        bool reverted;
+        try adapter.confirm(intentId, keccak256("second-ref")) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "double confirm accepted");
+    }
+
+    function testDifferentAdapterCannotConfirmSubmittedIntent() public {
+        _fundAndDeposit(100 ether);
+        AdapterCaller firstAdapter = _authorizedAdapter();
+        AdapterCaller secondAdapter = _authorizedAdapter();
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        firstAdapter.submit(intentId, keccak256("external-ref"));
+
+        bool reverted;
+        try secondAdapter.confirm(intentId, keccak256("execution-ref")) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "different adapter confirmed");
+    }
+
+    function testAdapterFailureUnlocksCollateralAndRisk() public {
+        _fundAndDeposit(100 ether);
+        AdapterCaller adapter = _authorizedAdapter();
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        adapter.submit(intentId, keccak256("external-ref"));
+        adapter.fail(intentId, keccak256("ADAPTER_FAILED"));
+
+        (, ConvictionVault.AdapterStatus adapterStatus,,,,) = vault.adapterRecords(intentId);
+        (,, uint256 borrowedNotional, uint256 exposureNotional,,) =
+            vault.getAccountMarginState(address(this), address(token));
+        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+
+        require(adapterStatus == ConvictionVault.AdapterStatus.FAILED, "adapter not failed");
+        require(intentStatus == ConvictionVault.IntentStatus.FAILED, "intent not failed");
+        require(vault.availableBalance(address(this), address(token)) == 100 ether, "not unlocked");
+        require(borrowedNotional == 0, "borrowed remains");
+        require(exposureNotional == 0, "exposure remains");
+    }
+
+    function testCloseExecutedIntentReleasesAccounting() public {
+        _fundAndDeposit(100 ether);
+        vault.setOperator(address(this), true);
+        AdapterCaller adapter = _authorizedAdapter();
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        adapter.submit(intentId, keccak256("external-ref"));
+        adapter.confirm(intentId, keccak256("execution-ref"));
+        vault.closeExecutedMarginIntent(intentId, keccak256("close-ref"));
+
+        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+        (,, uint256 borrowedNotional, uint256 exposureNotional,,) =
+            vault.getAccountMarginState(address(this), address(token));
+
+        require(intentStatus == ConvictionVault.IntentStatus.CLOSED, "not closed");
+        require(
+            vault.availableBalance(address(this), address(token)) == 100 ether,
+            "collateral not released"
+        );
+        require(borrowedNotional == 0, "borrowed remains");
+        require(exposureNotional == 0, "exposure remains");
+    }
+
+    function testHealthyExecutedIntentCannotLiquidate() public {
+        _fundAndDeposit(100 ether);
+        vault.setOperator(address(this), true);
+        AdapterCaller adapter = _authorizedAdapter();
+        bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+
+        adapter.submit(intentId, keccak256("external-ref"));
+        adapter.confirm(intentId, keccak256("execution-ref"));
+
+        bool reverted;
+        try vault.liquidateMarginIntent(intentId, keccak256("liquidation-ref")) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "healthy intent liquidated");
+    }
+
+    function testLiquidationReleasesAccountingWhenBelowMaintenance() public {
+        vault.setCollateralPolicy(
+            address(token), true, 100_000, 100 ether, 1_000, 100 ether, 200 ether
+        );
+        _fundAndDeposit(100 ether);
+        vault.setOperator(address(this), true);
+        AdapterCaller adapter = _authorizedAdapter();
+        bytes32 intentId = _createIntent(10 ether, 30_000, block.timestamp + 1 days);
+
+        adapter.submit(intentId, keccak256("external-ref"));
+        adapter.confirm(intentId, keccak256("execution-ref"));
+        vault.setCollateralPolicy(
+            address(token), true, 100_000, 100 ether, 4_000, 100 ether, 200 ether
+        );
+
+        require(vault.isLiquidatable(intentId), "not liquidatable");
+        vault.liquidateMarginIntent(intentId, keccak256("liquidation-ref"));
+
+        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+        (,, uint256 borrowedNotional, uint256 exposureNotional,,) =
+            vault.getAccountMarginState(address(this), address(token));
+
+        require(intentStatus == ConvictionVault.IntentStatus.LIQUIDATED, "not liquidated");
+        require(vault.availableBalance(address(this), address(token)) == 100 ether, "not unlocked");
+        require(borrowedNotional == 0, "borrowed remains");
+        require(exposureNotional == 0, "exposure remains");
+    }
+
     function testRejectExpiredDeadline() public {
         _fundAndDeposit(100 ether);
 
@@ -347,17 +523,17 @@ contract ConvictionVaultTest {
         require(reverted, "expired deadline accepted");
     }
 
-    function testOwnerIsNotOperatorByDefault() public {
+    function testOwnerCannotConfirmWithoutAdapterRole() public {
         _fundAndDeposit(100 ether);
         bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
 
         bool reverted;
-        try vault.markMarginIntentExecuted(intentId, keccak256("execution-ref")) { }
+        try vault.confirmMarginIntent(intentId, keccak256("execution-ref")) { }
         catch {
             reverted = true;
         }
 
-        require(reverted, "owner executed without operator role");
+        require(reverted, "owner confirmed without adapter role");
     }
 
     function testCannotTransitionIntentTwice() public {
@@ -388,19 +564,25 @@ contract ConvictionVaultTest {
         require(reverted, "locked collateral withdrawn");
     }
 
-    function testPausedVaultBlocksExecutionMarking() public {
+    function testPausedVaultBlocksAdapterConfirmation() public {
         _fundAndDeposit(100 ether);
-        vault.setOperator(address(this), true);
+        AdapterCaller adapter = _authorizedAdapter();
         bytes32 intentId = _createIntent(10 ether, 20_000, block.timestamp + 1 days);
+        adapter.submit(intentId, keccak256("external-ref"));
         vault.setPaused(true);
 
         bool reverted;
-        try vault.markMarginIntentExecuted(intentId, keccak256("execution-ref")) { }
+        try adapter.confirm(intentId, keccak256("execution-ref")) { }
         catch {
             reverted = true;
         }
 
         require(reverted, "paused execution accepted");
+    }
+
+    function _authorizedAdapter() private returns (AdapterCaller adapter) {
+        adapter = new AdapterCaller(vault);
+        vault.setAdapter(address(adapter), true);
     }
 
     function _fundAndDeposit(uint256 amount) private {

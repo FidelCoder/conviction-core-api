@@ -3,6 +3,7 @@ import { ExecutionAttemptStatus, ExecutionMode, ExecutionTargetType } from "@pri
 
 import { env } from "../config/env.js";
 import { AppError } from "../lib/errors.js";
+import { getActiveContractConfig } from "./contracts.js";
 import { prisma } from "../lib/prisma.js";
 
 export const MAX_PENDING_MARGIN_LEVERAGE = 10;
@@ -30,7 +31,9 @@ const supportedIntentChains = [
   },
 ];
 
-export function getExecutionCapabilities() {
+export async function getExecutionCapabilities() {
+  const activeContracts = await getActiveContractConfig(null);
+
   return {
     evmOnly: true,
     architecture: "INTENT_FIRST_MULTICHAIN_MARGIN_LAYER",
@@ -47,6 +50,7 @@ export function getExecutionCapabilities() {
       executionAdapterAddress: env.convictionExecutionAdapterAddress,
       marginVaultRequired: true,
       contractRepoPath: "contracts/src/ConvictionVault.sol",
+      activeContracts,
       notes: [
         "Contracts are scaffolded in this API repo.",
         "Vault contract tracks collateral, borrowed notional, exposure notional, and health basis points.",
