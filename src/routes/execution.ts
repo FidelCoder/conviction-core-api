@@ -9,7 +9,7 @@ type PositionExecutionParams = {
 
 export async function registerExecutionRoutes(app: FastifyInstance) {
   app.get("/execution/capabilities", async (_request, reply) => {
-    return sendSuccess(reply, { execution: getExecutionCapabilities() });
+    return sendSuccess(reply, { execution: await getExecutionCapabilities() });
   });
 
   app.post<{ Params: PositionExecutionParams }>(

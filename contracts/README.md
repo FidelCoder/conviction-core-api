@@ -15,7 +15,9 @@ This is a contract foundation, not a live execution system.
 - The owner can emergency-cancel pending intents and unlock collateral.
 - Authorized operators can mark an intent failed and unlock collateral.
 - Authorized operators can mark an intent executed only after a real adapter confirms execution.
-- `IConvictionExecutionAdapter` defines the future adapter boundary; venue-specific execution must stay outside the vault.
+- `IConvictionExecutionAdapter` defines the adapter boundary; venue-specific execution must stay outside the vault.
+- Adapter status flows through `SUBMITTED`, `CONFIRMED`, `FAILED`, and `CANCELLED`; direct operator execution marking is not available.
+- Executed intents can be closed by an operator or liquidated only when the account/collateral health is below the active maintenance margin.
 - Risk accounting is based on submitted intent collateral and leverage. It is not PnL and does not prove a market order filled.
 
 The core API must continue to report `marginExecutionEnabled=false` until real contracts are deployed, funded, monitored, and wired to execution adapters.
@@ -42,8 +44,8 @@ Do not reuse development private keys in production.
 
 ## Next Contract Work
 
-- Add adapter contracts for real prediction-market venues.
-- Add liquidation and close-position flows before enabling live leverage.
+- Implement real adapter contracts for prediction-market venues.
+- Add oracle/mark-price based health updates before enabling live leverage.
 - Add oracle/price-source validation for collateral and market exposure.
 - Add role handoff to multisig-controlled ownership before public funds.
 - Add audit-focused tests and invariant tests before mainnet deployment.

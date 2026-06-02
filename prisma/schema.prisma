@@ -79,16 +79,38 @@ enum CopyTradeStatus {
   CANCELLED
 }
 
+enum ContractRole {
+  MARGIN_VAULT
+  EXECUTION_ADAPTER
+  COLLATERAL_TOKEN
+}
+
+enum ContractTransactionStatus {
+  PREPARED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
+enum ContractTransactionType {
+  DEPOSIT
+  MARGIN_INTENT
+  CLOSE_INTENT
+  LIQUIDATION
+}
+
 model User {
-  id             String          @id @default(auto()) @map("_id") @db.ObjectId
-  displayName    String?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  socialAccounts SocialAccount[]
-  traderProfile  TraderProfile?
-  positions      Position[]
-  copiedTrades   CopyTrade[]     @relation("CopyTradeFollower")
-  tradingRooms   TradingRoom[]   @relation("TradingRoomOwner")
+  id                   String                @id @default(auto()) @map("_id") @db.ObjectId
+  displayName          String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  socialAccounts       SocialAccount[]
+  traderProfile        TraderProfile?
+  positions            Position[]
+  copiedTrades         CopyTrade[]           @relation("CopyTradeFollower")
+  tradingRooms         TradingRoom[]         @relation("TradingRoomOwner")
+  contractTransactions ContractTransaction[]
 }
 
 model SocialAccount {
@@ -154,9 +176,9 @@ model Market {
 }
 
 model Position {
-  id                        String             @id @default(auto()) @map("_id") @db.ObjectId
-  userId                    String             @db.ObjectId
-  marketId                  String             @db.ObjectId
+  id                        String                @id @default(auto()) @map("_id") @db.ObjectId
+  userId                    String                @db.ObjectId
+  marketId                  String                @db.ObjectId
   side                      PositionSide
   quantity                  String
   averageEntryPrice         String?
@@ -165,7 +187,7 @@ model Position {
   observedMarketPriceAt     DateTime?
   chainId                   Int?
   walletAddress             String?
-  executionMode             ExecutionMode      @default(SPOT)
+  executionMode             ExecutionMode         @default(SPOT)
   leverageMultiplier        String?
   marginCollateral          String?
   notionalAmount            String?
@@ -173,16 +195,17 @@ model Position {
   executionAdapterId        String?
   chainTransactionHash      String?
   idempotencyKey            String?
-  status                    PositionStatus     @default(PENDING_EXECUTION)
+  status                    PositionStatus        @default(PENDING_EXECUTION)
   openedAt                  DateTime?
   closedAt                  DateTime?
-  createdAt                 DateTime           @default(now())
-  updatedAt                 DateTime           @updatedAt
-  user                      User               @relation(fields: [userId], references: [id], onDelete: NoAction)
-  market                    Market             @relation(fields: [marketId], references: [id], onDelete: NoAction)
-  sourceCopyIntents         CopyTrade[]        @relation("CopyTradeSourcePosition")
-  resultingCopyTrade        CopyTrade?         @relation("CopyTradeResultingPosition")
-  executionAttempts         ExecutionAttempt[] @relation("PositionExecutionAttempts")
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+  user                      User                  @relation(fields: [userId], references: [id], onDelete: NoAction)
+  market                    Market                @relation(fields: [marketId], references: [id], onDelete: NoAction)
+  sourceCopyIntents         CopyTrade[]           @relation("CopyTradeSourcePosition")
+  resultingCopyTrade        CopyTrade?            @relation("CopyTradeResultingPosition")
+  executionAttempts         ExecutionAttempt[]    @relation("PositionExecutionAttempts")
+  contractTransactions      ContractTransaction[]
 
   @@index([userId])
   @@index([marketId])
@@ -306,4 +329,46 @@ model TradingRoom {
   signals     TradeSignal[]
 
   @@index([ownerId])
+}
+
+model ContractDeployment {
+  id            String       @id @default(auto()) @map("_id") @db.ObjectId
+  chainId       Int
+  role          ContractRole
+  address       String
+  label         String?
+  tokenSymbol   String?
+  tokenDecimals Int?
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([chainId, role, address])
+  @@index([chainId])
+  @@index([role])
+  @@index([isActive])
+}
+
+model ContractTransaction {
+  id              String                    @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String?                   @db.ObjectId
+  positionId      String?                   @db.ObjectId
+  chainId         Int
+  contractAddress String
+  walletAddress   String
+  transactionHash String?
+  type            ContractTransactionType
+  status          ContractTransactionStatus @default(PREPARED)
+  requestPayload  Json?
+  responsePayload Json?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  user            User?                     @relation(fields: [userId], references: [id], onDelete: NoAction)
+  position        Position?                 @relation(fields: [positionId], references: [id], onDelete: NoAction)
+
+  @@index([userId])
+  @@index([positionId])
+  @@index([chainId])
+  @@index([status])
+  @@index([transactionHash])
 }

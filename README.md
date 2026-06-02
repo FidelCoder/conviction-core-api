@@ -89,6 +89,12 @@ If Vercel returns an authentication page, disable deployment protection for the 
 - `GET /health` returns API health status.
 - `GET /execution/capabilities` returns the current execution capability contract for clients.
 - `POST /execution/positions/:positionId/start` records an execution attempt and blocks it while adapters/contracts are not live.
+- `GET /contracts/config` lists stored contract deployments.
+- `POST /contracts/config` stores a vault, adapter, or collateral-token deployment for a chain.
+- `GET /contracts/config/active` lists active contract deployments, optionally filtered by `chainId`.
+- `POST /contracts/margin-intents/prepare` prepares a real vault call payload from a pending margin position intent.
+- `PATCH /contracts/transactions/:id` records wallet transaction hashes and transaction status updates.
+- `GET /positions/:positionId/contract-transactions` lists contract transactions for one position.
 - `POST /social-accounts` creates or fetches a real user from a Telegram or Farcaster identity.
 - `POST /trader-profiles` creates or updates a trader profile for a real user.
 - `GET /trader-profiles/:id` returns one trader profile.
@@ -211,6 +217,53 @@ DEPLOYER_PRIVATE_KEY=
 ```
 
 Start with Base Sepolia for deployment tests. Do not use production funds or claim execution support until adapter confirmation, liquidation and close-position flows, collateral policy review, monitoring, and operational controls are implemented.
+
+## Contract API
+
+Store active contract deployments before preparing wallet transactions:
+
+```sh
+curl -X POST http://localhost:3000/contracts/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "chainId": 84532,
+    "role": "MARGIN_VAULT",
+    "address": "0x0000000000000000000000000000000000000000",
+    "label": "Base Sepolia vault"
+  }'
+
+curl -X POST http://localhost:3000/contracts/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "chainId": 84532,
+    "role": "COLLATERAL_TOKEN",
+    "address": "0x0000000000000000000000000000000000000000",
+    "tokenSymbol": "USDC",
+    "tokenDecimals": 6
+  }'
+```
+
+Prepare a margin-intent contract call from a real pending margin position:
+
+```sh
+curl -X POST http://localhost:3000/contracts/margin-intents/prepare \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "positionId": "existing-margin-position-id",
+    "maxSlippageBps": 100
+  }'
+```
+
+The prepare endpoint creates a `PREPARED` contract transaction record and returns the vault address, ABI fragment, and arguments for the client wallet. Recording a submitted hash updates transaction tracking only; it does not mark the position as executed. Execution requires adapter confirmation and real venue/on-chain evidence.
+
+```sh
+curl -X PATCH http://localhost:3000/contracts/transactions/:id \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "transactionHash": "0x...",
+    "status": "SUBMITTED"
+  }'
+```
 
 ## Positions and Copy Intents
 

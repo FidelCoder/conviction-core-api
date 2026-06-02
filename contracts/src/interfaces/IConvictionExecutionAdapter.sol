@@ -22,5 +22,9 @@ interface IConvictionExecutionAdapter {
 
     function submitMarginIntent(MarginExecutionRequest calldata request)
         external
-        returns (bytes32 executionRef);
+        returns (bytes32 externalRef);
+
+    function cancelMarginIntent(bytes32 intentId, bytes32 reasonCode) external;
+
+    function closeMarginIntent(bytes32 intentId, bytes32 closeRef) external;
 }

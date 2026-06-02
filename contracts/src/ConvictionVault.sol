@@ -12,14 +12,34 @@ contract ConvictionVault {
     enum IntentStatus {
         NONE,
         PENDING,
-        CANCELLED,
+        SUBMITTED,
         EXECUTED,
-        FAILED
+        FAILED,
+        CANCELLED,
+        CLOSED,
+        LIQUIDATED
+    }
+
+    enum AdapterStatus {
+        NONE,
+        SUBMITTED,
+        CONFIRMED,
+        FAILED,
+        CANCELLED
     }
 
     struct AccountRisk {
         uint256 borrowedNotional;
         uint256 exposureNotional;
+    }
+
+    struct AdapterRecord {
+        address adapter;
+        AdapterStatus status;
+        bytes32 externalRef;
+        bytes32 failureCode;
+        uint256 submittedAt;
+        uint256 updatedAt;
     }
 
     struct CollateralPolicy {
@@ -59,6 +79,7 @@ contract ConvictionVault {
     bool private locked;
 
     mapping(address collateralToken => CollateralPolicy policy) public collateralPolicies;
+    mapping(address adapter => bool enabled) public authorizedAdapters;
     mapping(address operator => bool enabled) public authorizedOperators;
     mapping(address account => mapping(address collateralToken => uint256 amount)) public
         availableBalance;
@@ -66,10 +87,12 @@ contract ConvictionVault {
         lockedBalance;
     mapping(address account => mapping(address collateralToken => AccountRisk risk)) public
         accountRisk;
+    mapping(bytes32 intentId => AdapterRecord record) public adapterRecords;
     mapping(bytes32 intentId => MarginIntent intent) public marginIntents;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event PauseStatusUpdated(bool paused);
+    event AdapterUpdated(address indexed adapter, bool enabled);
     event CollateralSupportUpdated(address indexed collateralToken, bool enabled);
     event CollateralPolicyUpdated(
         address indexed collateralToken,
@@ -102,26 +125,34 @@ contract ConvictionVault {
         uint256 notionalAmount,
         uint256 borrowedAmount
     );
+    event MarginIntentSubmitted(
+        bytes32 indexed intentId, address indexed adapter, bytes32 externalRef
+    );
     event MarginIntentCancelled(bytes32 indexed intentId, address indexed account);
+    event MarginIntentClosed(bytes32 indexed intentId, address indexed operator, bytes32 closeRef);
     event MarginIntentEmergencyCancelled(
         bytes32 indexed intentId, address indexed account, bytes32 reasonCode
     );
-    event MarginIntentFailed(
-        bytes32 indexed intentId, address indexed operator, bytes32 reasonCode
-    );
+    event MarginIntentFailed(bytes32 indexed intentId, address indexed adapter, bytes32 reasonCode);
     event MarginIntentExecuted(
-        bytes32 indexed intentId, address indexed operator, bytes32 executionRef
+        bytes32 indexed intentId, address indexed adapter, bytes32 executionRef
+    );
+    event MarginIntentLiquidated(
+        bytes32 indexed intentId, address indexed operator, bytes32 liquidationRef
     );
 
     error AccountBorrowLimitExceeded();
     error AccountExposureLimitExceeded();
     error AccountHealthTooLow();
+    error AdapterAlreadySubmitted();
     error AmountRequired();
     error CollateralLimitExceeded();
     error CollateralNotSupported(address collateralToken);
     error DeadlineExpired();
+    error HealthyAccount();
     error InsufficientAvailableBalance();
     error InvalidAddress();
+    error InvalidAdapterStatus();
     error InvalidIntentStatus();
     error InvalidLeverage();
     error InvalidMarginRequirement();
@@ -131,6 +162,11 @@ contract ConvictionVault {
     error ReentrantCall();
     error TransferFailed();
     error VaultPaused();
+
+    modifier onlyAdapter() {
+        _checkAdapter();
+        _;
+    }
 
     modifier onlyOwner() {
         _checkOwner();
@@ -170,6 +206,13 @@ contract ConvictionVault {
     function setPaused(bool nextPaused) external onlyOwner {
         paused = nextPaused;
         emit PauseStatusUpdated(nextPaused);
+    }
+
+    function setAdapter(address adapter, bool enabled) external onlyOwner {
+        if (adapter == address(0)) revert InvalidAddress();
+
+        authorizedAdapters[adapter] = enabled;
+        emit AdapterUpdated(adapter, enabled);
     }
 
     function setCollateralSupport(address collateralToken, bool enabled) external onlyOwner {
@@ -329,6 +372,90 @@ contract ConvictionVault {
         );
     }
 
+    function submitMarginIntent(bytes32 intentId, bytes32 externalRef)
+        external
+        onlyAdapter
+        whenNotPaused
+    {
+        MarginIntent storage intent = marginIntents[intentId];
+        if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
+        if (adapterRecords[intentId].status != AdapterStatus.NONE) {
+            revert AdapterAlreadySubmitted();
+        }
+
+        intent.status = IntentStatus.SUBMITTED;
+        adapterRecords[intentId] = AdapterRecord({
+            adapter: msg.sender,
+            status: AdapterStatus.SUBMITTED,
+            externalRef: externalRef,
+            failureCode: bytes32(0),
+            submittedAt: block.timestamp,
+            updatedAt: block.timestamp
+        });
+
+        emit MarginIntentSubmitted(intentId, msg.sender, externalRef);
+    }
+
+    function confirmMarginIntent(bytes32 intentId, bytes32 executionRef)
+        external
+        onlyAdapter
+        nonReentrant
+        whenNotPaused
+    {
+        AdapterRecord storage record = adapterRecords[intentId];
+        MarginIntent storage intent = marginIntents[intentId];
+        if (record.adapter != msg.sender) revert NotAuthorized();
+        if (record.status != AdapterStatus.SUBMITTED) revert InvalidAdapterStatus();
+        if (intent.status != IntentStatus.SUBMITTED) revert InvalidIntentStatus();
+
+        record.status = AdapterStatus.CONFIRMED;
+        record.externalRef = executionRef;
+        record.updatedAt = block.timestamp;
+        intent.status = IntentStatus.EXECUTED;
+
+        emit MarginIntentExecuted(intentId, msg.sender, executionRef);
+    }
+
+    function failMarginIntent(bytes32 intentId, bytes32 reasonCode)
+        external
+        onlyAdapter
+        nonReentrant
+    {
+        AdapterRecord storage record = adapterRecords[intentId];
+        MarginIntent storage intent = marginIntents[intentId];
+        if (record.adapter != msg.sender) revert NotAuthorized();
+        if (record.status != AdapterStatus.SUBMITTED) revert InvalidAdapterStatus();
+        if (intent.status != IntentStatus.SUBMITTED) revert InvalidIntentStatus();
+
+        record.status = AdapterStatus.FAILED;
+        record.failureCode = reasonCode;
+        record.updatedAt = block.timestamp;
+        _releaseMarginIntent(intent);
+        intent.status = IntentStatus.FAILED;
+
+        emit MarginIntentFailed(intentId, msg.sender, reasonCode);
+    }
+
+    function cancelSubmittedMarginIntent(bytes32 intentId, bytes32 reasonCode)
+        external
+        onlyAdapter
+        nonReentrant
+    {
+        AdapterRecord storage record = adapterRecords[intentId];
+        MarginIntent storage intent = marginIntents[intentId];
+        if (record.adapter != msg.sender) revert NotAuthorized();
+        if (record.status != AdapterStatus.SUBMITTED) revert InvalidAdapterStatus();
+        if (intent.status != IntentStatus.SUBMITTED) revert InvalidIntentStatus();
+
+        record.status = AdapterStatus.CANCELLED;
+        record.failureCode = reasonCode;
+        record.updatedAt = block.timestamp;
+        _releaseMarginIntent(intent);
+        intent.status = IntentStatus.CANCELLED;
+
+        emit MarginIntentCancelled(intentId, intent.account);
+    }
+
     function cancelMarginIntent(bytes32 intentId) external nonReentrant {
         MarginIntent storage intent = marginIntents[intentId];
         if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
@@ -342,18 +469,56 @@ contract ConvictionVault {
         emit MarginIntentCancelled(intentId, intent.account);
     }
 
+    function closeExecutedMarginIntent(bytes32 intentId, bytes32 closeRef)
+        external
+        onlyOperator
+        nonReentrant
+    {
+        MarginIntent storage intent = marginIntents[intentId];
+        if (intent.status != IntentStatus.EXECUTED) revert InvalidIntentStatus();
+
+        _releaseMarginIntent(intent);
+        intent.status = IntentStatus.CLOSED;
+
+        emit MarginIntentClosed(intentId, msg.sender, closeRef);
+    }
+
     function emergencyCancelMarginIntent(bytes32 intentId, bytes32 reasonCode)
         external
         onlyOwner
         nonReentrant
     {
         MarginIntent storage intent = marginIntents[intentId];
-        if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
+        if (intent.status != IntentStatus.PENDING && intent.status != IntentStatus.SUBMITTED) {
+            revert InvalidIntentStatus();
+        }
+
+        AdapterRecord storage record = adapterRecords[intentId];
+        if (record.status == AdapterStatus.SUBMITTED) {
+            record.status = AdapterStatus.CANCELLED;
+            record.failureCode = reasonCode;
+            record.updatedAt = block.timestamp;
+        }
 
         _releaseMarginIntent(intent);
         intent.status = IntentStatus.CANCELLED;
 
         emit MarginIntentEmergencyCancelled(intentId, intent.account, reasonCode);
+    }
+
+    function liquidateMarginIntent(bytes32 intentId, bytes32 liquidationRef)
+        external
+        onlyOperator
+        nonReentrant
+    {
+        MarginIntent storage intent = marginIntents[intentId];
+        if (intent.status != IntentStatus.EXECUTED) revert InvalidIntentStatus();
+        if (!isLiquidatable(intentId)) revert HealthyAccount();
+
+        _releaseMarginIntent(intent);
+        intent.status = IntentStatus.LIQUIDATED;
+
+        emit MarginIntentLiquidated(intentId, msg.sender, liquidationRef);
     }
 
     function markMarginIntentFailed(bytes32 intentId, bytes32 reasonCode)
@@ -368,20 +533,6 @@ contract ConvictionVault {
         intent.status = IntentStatus.FAILED;
 
         emit MarginIntentFailed(intentId, msg.sender, reasonCode);
-    }
-
-    function markMarginIntentExecuted(bytes32 intentId, bytes32 executionRef)
-        external
-        onlyOperator
-        nonReentrant
-        whenNotPaused
-    {
-        MarginIntent storage intent = marginIntents[intentId];
-        if (intent.status != IntentStatus.PENDING) revert InvalidIntentStatus();
-
-        intent.status = IntentStatus.EXECUTED;
-
-        emit MarginIntentExecuted(intentId, msg.sender, executionRef);
     }
 
     function calculateIntentAmounts(uint256 collateralAmount, uint256 leverageBps)
@@ -440,6 +591,20 @@ contract ConvictionVault {
             lockedBalance[account][collateralToken],
             accountRisk[account][collateralToken].exposureNotional
         );
+    }
+
+    function isLiquidatable(bytes32 intentId) public view returns (bool) {
+        MarginIntent memory intent = marginIntents[intentId];
+        if (intent.status != IntentStatus.EXECUTED) return false;
+
+        CollateralPolicy memory policy = collateralPolicies[intent.collateralToken];
+        uint256 maintenanceMarginBps =
+            policy.enabled ? policy.maintenanceMarginBps : intent.maintenanceMarginBps;
+
+        return _calculateHealthBps(
+            lockedBalance[intent.account][intent.collateralToken],
+            accountRisk[intent.account][intent.collateralToken].exposureNotional
+        ) < maintenanceMarginBps;
     }
 
     function _validateNextAccountRisk(
@@ -508,6 +673,10 @@ contract ConvictionVault {
         if (exposureAmount == 0) return type(uint256).max;
 
         return collateralAmount * BPS / exposureAmount;
+    }
+
+    function _checkAdapter() private view {
+        if (!authorizedAdapters[msg.sender]) revert NotAuthorized();
     }
 
     function _checkNotPaused() private view {
