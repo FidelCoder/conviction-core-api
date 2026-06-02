@@ -49,6 +49,7 @@ export function getExecutionCapabilities() {
       contractRepoPath: "contracts/src/ConvictionVault.sol",
       notes: [
         "Contracts are scaffolded in this API repo.",
+        "Vault contract tracks collateral, borrowed notional, exposure notional, and health basis points.",
         "Configured contract addresses do not enable execution by themselves.",
         "Margin execution remains disabled until deployment, liquidity, monitoring, and adapters are live.",
       ],
