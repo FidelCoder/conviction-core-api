@@ -2,6 +2,7 @@
 pragma solidity ^0.8.28;
 
 import { ConvictionVault } from "../src/ConvictionVault.sol";
+import { ConvictionVaultState } from "../src/ConvictionVaultState.sol";
 
 contract AdapterCaller {
     ConvictionVault private vault;
@@ -194,7 +195,7 @@ contract ConvictionVaultTest {
         try vault.createMarginIntent(
             address(token),
             keccak256("another-market-id"),
-            ConvictionVault.Side.NO,
+            ConvictionVaultState.Side.NO,
             10 ether,
             20_000,
             100,
@@ -233,7 +234,7 @@ contract ConvictionVaultTest {
         try vault.createMarginIntent(
             address(token),
             keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
+            ConvictionVaultState.Side.YES,
             10 ether,
             30_000,
             100,
@@ -257,7 +258,7 @@ contract ConvictionVaultTest {
         try vault.createMarginIntent(
             address(token),
             keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
+            ConvictionVaultState.Side.YES,
             11 ether,
             20_000,
             100,
@@ -281,7 +282,7 @@ contract ConvictionVaultTest {
         try vault.createMarginIntent(
             address(token),
             keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
+            ConvictionVaultState.Side.YES,
             10 ether,
             30_000,
             100,
@@ -305,7 +306,7 @@ contract ConvictionVaultTest {
         try vault.createMarginIntent(
             address(token),
             keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
+            ConvictionVaultState.Side.YES,
             10 ether,
             30_000,
             100,
@@ -329,7 +330,7 @@ contract ConvictionVaultTest {
         try vault.createMarginIntent(
             address(token),
             keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
+            ConvictionVaultState.Side.YES,
             10 ether,
             30_000,
             100,
@@ -372,11 +373,12 @@ contract ConvictionVaultTest {
         adapter.submit(intentId, keccak256("external-ref"));
         adapter.confirm(intentId, keccak256("execution-ref"));
 
-        (, ConvictionVault.AdapterStatus adapterStatus,,,,) = vault.adapterRecords(intentId);
-        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+        (, ConvictionVaultState.AdapterStatus adapterStatus,,,,) = vault.adapterRecords(intentId);
+        (,,,,,,,,,,,,, ConvictionVaultState.IntentStatus intentStatus) =
+            vault.marginIntents(intentId);
 
-        require(adapterStatus == ConvictionVault.AdapterStatus.CONFIRMED, "not confirmed");
-        require(intentStatus == ConvictionVault.IntentStatus.EXECUTED, "not executed");
+        require(adapterStatus == ConvictionVaultState.AdapterStatus.CONFIRMED, "not confirmed");
+        require(intentStatus == ConvictionVaultState.IntentStatus.EXECUTED, "not executed");
     }
 
     function testAdapterCannotConfirmTwice() public {
@@ -421,13 +423,14 @@ contract ConvictionVaultTest {
         adapter.submit(intentId, keccak256("external-ref"));
         adapter.fail(intentId, keccak256("ADAPTER_FAILED"));
 
-        (, ConvictionVault.AdapterStatus adapterStatus,,,,) = vault.adapterRecords(intentId);
+        (, ConvictionVaultState.AdapterStatus adapterStatus,,,,) = vault.adapterRecords(intentId);
         (,, uint256 borrowedNotional, uint256 exposureNotional,,) =
             vault.getAccountMarginState(address(this), address(token));
-        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+        (,,,,,,,,,,,,, ConvictionVaultState.IntentStatus intentStatus) =
+            vault.marginIntents(intentId);
 
-        require(adapterStatus == ConvictionVault.AdapterStatus.FAILED, "adapter not failed");
-        require(intentStatus == ConvictionVault.IntentStatus.FAILED, "intent not failed");
+        require(adapterStatus == ConvictionVaultState.AdapterStatus.FAILED, "adapter not failed");
+        require(intentStatus == ConvictionVaultState.IntentStatus.FAILED, "intent not failed");
         require(vault.availableBalance(address(this), address(token)) == 100 ether, "not unlocked");
         require(borrowedNotional == 0, "borrowed remains");
         require(exposureNotional == 0, "exposure remains");
@@ -443,11 +446,12 @@ contract ConvictionVaultTest {
         adapter.confirm(intentId, keccak256("execution-ref"));
         vault.closeExecutedMarginIntent(intentId, keccak256("close-ref"));
 
-        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+        (,,,,,,,,,,,,, ConvictionVaultState.IntentStatus intentStatus) =
+            vault.marginIntents(intentId);
         (,, uint256 borrowedNotional, uint256 exposureNotional,,) =
             vault.getAccountMarginState(address(this), address(token));
 
-        require(intentStatus == ConvictionVault.IntentStatus.CLOSED, "not closed");
+        require(intentStatus == ConvictionVaultState.IntentStatus.CLOSED, "not closed");
         require(
             vault.availableBalance(address(this), address(token)) == 100 ether,
             "collateral not released"
@@ -492,11 +496,12 @@ contract ConvictionVaultTest {
         require(vault.isLiquidatable(intentId), "not liquidatable");
         vault.liquidateMarginIntent(intentId, keccak256("liquidation-ref"));
 
-        (,,,,,,,,,,,,, ConvictionVault.IntentStatus intentStatus) = vault.marginIntents(intentId);
+        (,,,,,,,,,,,,, ConvictionVaultState.IntentStatus intentStatus) =
+            vault.marginIntents(intentId);
         (,, uint256 borrowedNotional, uint256 exposureNotional,,) =
             vault.getAccountMarginState(address(this), address(token));
 
-        require(intentStatus == ConvictionVault.IntentStatus.LIQUIDATED, "not liquidated");
+        require(intentStatus == ConvictionVaultState.IntentStatus.LIQUIDATED, "not liquidated");
         require(vault.availableBalance(address(this), address(token)) == 100 ether, "not unlocked");
         require(borrowedNotional == 0, "borrowed remains");
         require(exposureNotional == 0, "exposure remains");
@@ -509,7 +514,7 @@ contract ConvictionVaultTest {
         try vault.createMarginIntent(
             address(token),
             keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
+            ConvictionVaultState.Side.YES,
             10 ether,
             20_000,
             100,
@@ -599,7 +604,7 @@ contract ConvictionVaultTest {
         return vault.createMarginIntent(
             address(token),
             keccak256("polymarket-market-id"),
-            ConvictionVault.Side.YES,
+            ConvictionVaultState.Side.YES,
             collateralAmount,
             leverageBps,
             100,
