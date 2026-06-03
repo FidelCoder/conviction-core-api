@@ -22,6 +22,16 @@ This is a contract foundation, not a live execution system.
 
 The core API must continue to report `marginExecutionEnabled=false` until real contracts are deployed, funded, monitored, and wired to execution adapters.
 
+## Contract Layout
+
+The vault is split into three focused source files:
+
+- `contracts/src/ConvictionVaultState.sol` owns enums, structs, storage, events, errors, and shared modifiers.
+- `contracts/src/ConvictionVaultAccounting.sol` owns collateral policy, deposits, withdrawals, account risk, transfer helpers, and guard checks.
+- `contracts/src/ConvictionVault.sol` keeps the deployable vault name and owns margin-intent lifecycle transitions.
+
+This keeps `ConvictionVault.sol` small while preserving the deployment import path used by scripts and tests.
+
 ## Commands
 
 ```sh
