@@ -10,13 +10,29 @@ abstract contract ConvictionVaultAccounting is ConvictionVaultState {
     function transferOwnership(address newOwner) external onlyOwner {
         if (newOwner == address(0)) revert InvalidAddress();
 
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotAuthorized();
+
+        address previousOwner = owner;
+        owner = msg.sender;
+        pendingOwner = address(0);
+        emit OwnershipTransferred(previousOwner, msg.sender);
     }
 
     function setPaused(bool nextPaused) external onlyOwner {
         paused = nextPaused;
         emit PauseStatusUpdated(nextPaused);
+    }
+
+    function setLiquidationRecipient(address nextLiquidationRecipient) external onlyOwner {
+        if (nextLiquidationRecipient == address(0)) revert InvalidAddress();
+
+        liquidationRecipient = nextLiquidationRecipient;
+        emit LiquidationRecipientUpdated(nextLiquidationRecipient);
     }
 
     function setAdapter(address adapter, bool enabled) external onlyOwner {
@@ -47,7 +63,9 @@ abstract contract ConvictionVaultAccounting is ConvictionVaultState {
         uint256 maxAccountBorrowed,
         uint256 maxAccountExposure
     ) public onlyOwner {
-        if (collateralToken == address(0)) revert InvalidAddress();
+        if (collateralToken == address(0) || collateralToken.code.length == 0) {
+            revert InvalidAddress();
+        }
 
         if (enabled) {
             if (maxLeverageBps < BPS || maxLeverageBps > MAX_LEVERAGE_BPS) {
@@ -91,10 +109,14 @@ abstract contract ConvictionVaultAccounting is ConvictionVaultState {
         _requireSupportedCollateral(collateralToken);
         if (amount == 0) revert AmountRequired();
 
+        uint256 balanceBefore = IERC20(collateralToken).balanceOf(address(this));
         _safeTransferFrom(collateralToken, msg.sender, address(this), amount);
-        availableBalance[msg.sender][collateralToken] += amount;
+        uint256 receivedAmount = IERC20(collateralToken).balanceOf(address(this)) - balanceBefore;
+        if (receivedAmount != amount) revert TransferFailed();
 
-        emit Deposited(msg.sender, collateralToken, amount);
+        availableBalance[msg.sender][collateralToken] += receivedAmount;
+
+        emit Deposited(msg.sender, collateralToken, receivedAmount);
     }
 
     function withdraw(address collateralToken, uint256 amount) external nonReentrant {
@@ -277,6 +299,16 @@ abstract contract ConvictionVaultAccounting is ConvictionVaultState {
         );
     }
 
+    function _seizeMarginIntent(MarginIntent storage intent, address recipient) internal {
+        if (recipient == address(0)) revert InvalidAddress();
+
+        lockedBalance[intent.account][intent.collateralToken] -= intent.collateralAmount;
+        availableBalance[recipient][intent.collateralToken] += intent.collateralAmount;
+        _removeAccountRisk(
+            intent.account, intent.collateralToken, intent.borrowedAmount, intent.notionalAmount
+        );
+    }
+
     function _safeTransfer(address collateralToken, address to, uint256 amount) private {
         _callOptionalReturn(collateralToken, abi.encodeCall(IERC20.transfer, (to, amount)));
     }
@@ -290,6 +322,8 @@ abstract contract ConvictionVaultAccounting is ConvictionVaultState {
     }
 
     function _callOptionalReturn(address token, bytes memory data) private {
+        if (token.code.length == 0) revert TransferFailed();
+
         (bool success, bytes memory returndata) = token.call(data);
         if (!success) revert TransferFailed();
         if (returndata.length > 0 && !abi.decode(returndata, (bool))) revert TransferFailed();

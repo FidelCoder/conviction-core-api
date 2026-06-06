@@ -223,7 +223,7 @@ contract ConvictionVault is ConvictionVaultAccounting {
         if (intent.status != IntentStatus.EXECUTED) revert InvalidIntentStatus();
         if (!isLiquidatable(intentId)) revert HealthyAccount();
 
-        _releaseMarginIntent(intent);
+        _seizeMarginIntent(intent, liquidationRecipient);
         intent.status = IntentStatus.LIQUIDATED;
 
         emit MarginIntentLiquidated(intentId, msg.sender, liquidationRef);
