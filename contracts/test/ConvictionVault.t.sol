@@ -28,6 +28,22 @@ contract AdapterCaller {
     }
 }
 
+contract OwnerCaller {
+    ConvictionVault private vault;
+
+    constructor(ConvictionVault vault_) {
+        vault = vault_;
+    }
+
+    function acceptOwnership() external {
+        vault.acceptOwnership();
+    }
+
+    function setPaused(bool nextPaused) external {
+        vault.setPaused(nextPaused);
+    }
+}
+
 contract MockERC20 {
     string public name = "Mock USD";
     string public symbol = "mUSD";
@@ -62,6 +78,96 @@ contract MockERC20 {
     }
 }
 
+contract ShortTransferERC20 {
+    string public name = "Short Transfer USD";
+    string public symbol = "sUSD";
+    uint8 public decimals = 18;
+
+    mapping(address account => uint256 amount) public balanceOf;
+    mapping(address owner => mapping(address spender => uint256 amount)) public allowance;
+
+    function mint(address account, uint256 amount) external {
+        balanceOf[account] += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "insufficient balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        require(amount > 0, "amount required");
+        require(balanceOf[from] >= amount, "insufficient balance");
+        require(allowance[from][msg.sender] >= amount, "insufficient allowance");
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount - 1;
+        return true;
+    }
+}
+
+contract ReentrantTransferERC20 {
+    string public name = "Reentrant USD";
+    string public symbol = "rUSD";
+    uint8 public decimals = 18;
+
+    ConvictionVault private vault;
+    bool public attackEnabled;
+    bool public attackBlocked;
+
+    mapping(address account => uint256 amount) public balanceOf;
+    mapping(address owner => mapping(address spender => uint256 amount)) public allowance;
+
+    constructor(ConvictionVault vault_) {
+        vault = vault_;
+    }
+
+    function setAttackEnabled(bool enabled) external {
+        attackEnabled = enabled;
+        attackBlocked = false;
+    }
+
+    function mint(address account, uint256 amount) external {
+        balanceOf[account] += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "insufficient balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        if (attackEnabled) {
+            attackEnabled = false;
+            try vault.deposit(address(this), 1) { }
+            catch {
+                attackBlocked = true;
+            }
+        }
+
+        require(balanceOf[from] >= amount, "insufficient balance");
+        require(allowance[from][msg.sender] >= amount, "insufficient allowance");
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
 contract ConvictionVaultTest {
     ConvictionVault private vault;
     MockERC20 private token;
@@ -70,6 +176,90 @@ contract ConvictionVaultTest {
         vault = new ConvictionVault(address(this));
         token = new MockERC20();
         vault.setCollateralSupport(address(token), true);
+    }
+
+    function testOwnershipTransferRequiresPendingOwnerAcceptance() public {
+        OwnerCaller nextOwner = new OwnerCaller(vault);
+
+        vault.transferOwnership(address(nextOwner));
+
+        require(vault.owner() == address(this), "owner changed early");
+        require(vault.pendingOwner() == address(nextOwner), "pending owner missing");
+
+        bool earlyOwnerReverted;
+        try nextOwner.setPaused(true) { }
+        catch {
+            earlyOwnerReverted = true;
+        }
+        require(earlyOwnerReverted, "pending owner acted early");
+
+        nextOwner.acceptOwnership();
+
+        require(vault.owner() == address(nextOwner), "owner not accepted");
+        require(vault.pendingOwner() == address(0), "pending owner not cleared");
+
+        bool previousOwnerReverted;
+        try vault.setPaused(true) { }
+        catch {
+            previousOwnerReverted = true;
+        }
+        require(previousOwnerReverted, "previous owner retained control");
+
+        nextOwner.setPaused(true);
+        require(vault.paused(), "new owner cannot manage vault");
+    }
+
+    function testRejectNonContractCollateralPolicy() public {
+        bool reverted;
+        try vault.setCollateralSupport(address(uint160(0xBEEF)), true) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "non-contract collateral accepted");
+    }
+
+    function testOwnerCanUpdateLiquidationRecipient() public {
+        address recipient = address(uint160(0xCAFE));
+
+        vault.setLiquidationRecipient(recipient);
+
+        require(vault.liquidationRecipient() == recipient, "recipient not updated");
+    }
+
+    function testDepositRequiresExactReceivedAmount() public {
+        ShortTransferERC20 shortToken = new ShortTransferERC20();
+        vault.setCollateralSupport(address(shortToken), true);
+        shortToken.mint(address(this), 10 ether);
+        shortToken.approve(address(vault), 10 ether);
+
+        bool reverted;
+        try vault.deposit(address(shortToken), 10 ether) { }
+        catch {
+            reverted = true;
+        }
+
+        require(reverted, "short transfer deposit accepted");
+        require(
+            vault.availableBalance(address(this), address(shortToken)) == 0,
+            "short transfer credited"
+        );
+    }
+
+    function testDepositBlocksReentrantTokenCallback() public {
+        ReentrantTransferERC20 reentrantToken = new ReentrantTransferERC20(vault);
+        vault.setCollateralSupport(address(reentrantToken), true);
+        reentrantToken.mint(address(this), 10 ether);
+        reentrantToken.approve(address(vault), 10 ether);
+        reentrantToken.setAttackEnabled(true);
+
+        vault.deposit(address(reentrantToken), 10 ether);
+
+        require(reentrantToken.attackBlocked(), "reentrant call was not blocked");
+        require(
+            vault.availableBalance(address(this), address(reentrantToken)) == 10 ether,
+            "valid deposit not credited"
+        );
     }
 
     function testDepositAndWithdraw() public {
@@ -478,7 +668,9 @@ contract ConvictionVaultTest {
         require(reverted, "healthy intent liquidated");
     }
 
-    function testLiquidationReleasesAccountingWhenBelowMaintenance() public {
+    function testLiquidationSeizesCollateralWhenBelowMaintenance() public {
+        address recipient = address(uint160(0xCAFE));
+        vault.setLiquidationRecipient(recipient);
         vault.setCollateralPolicy(
             address(token), true, 100_000, 100 ether, 1_000, 100 ether, 200 ether
         );
@@ -498,11 +690,16 @@ contract ConvictionVaultTest {
 
         (,,,,,,,,,,,,, ConvictionVaultState.IntentStatus intentStatus) =
             vault.marginIntents(intentId);
-        (,, uint256 borrowedNotional, uint256 exposureNotional,,) =
+        (, uint256 lockedAmount, uint256 borrowedNotional, uint256 exposureNotional,,) =
             vault.getAccountMarginState(address(this), address(token));
 
         require(intentStatus == ConvictionVaultState.IntentStatus.LIQUIDATED, "not liquidated");
-        require(vault.availableBalance(address(this), address(token)) == 100 ether, "not unlocked");
+        require(
+            vault.availableBalance(address(this), address(token)) == 90 ether, "trader refunded"
+        );
+        require(vault.lockedBalance(address(this), address(token)) == 0, "locked remains");
+        require(lockedAmount == 0, "account state locked remains");
+        require(vault.availableBalance(recipient, address(token)) == 10 ether, "not seized");
         require(borrowedNotional == 0, "borrowed remains");
         require(exposureNotional == 0, "exposure remains");
     }

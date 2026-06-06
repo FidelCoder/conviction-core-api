@@ -72,6 +72,8 @@ abstract contract ConvictionVaultState {
     uint256 public constant MAX_SLIPPAGE_BPS = 2_000;
 
     address public owner;
+    address public pendingOwner;
+    address public liquidationRecipient;
     uint256 public nextIntentNonce;
     bool public paused;
     bool internal locked;
@@ -88,7 +90,9 @@ abstract contract ConvictionVaultState {
     mapping(bytes32 intentId => AdapterRecord record) public adapterRecords;
     mapping(bytes32 intentId => MarginIntent intent) public marginIntents;
 
+    event OwnershipTransferStarted(address indexed currentOwner, address indexed pendingOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event LiquidationRecipientUpdated(address indexed liquidationRecipient);
     event PauseStatusUpdated(bool paused);
     event AdapterUpdated(address indexed adapter, bool enabled);
     event CollateralSupportUpdated(address indexed collateralToken, bool enabled);
@@ -191,7 +195,9 @@ abstract contract ConvictionVaultState {
         if (initialOwner == address(0)) revert InvalidAddress();
 
         owner = initialOwner;
+        liquidationRecipient = initialOwner;
         emit OwnershipTransferred(address(0), initialOwner);
+        emit LiquidationRecipientUpdated(initialOwner);
     }
 
     function _checkAdapter() internal view virtual;

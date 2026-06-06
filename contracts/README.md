@@ -6,18 +6,19 @@ Foundry contracts for the Conviction Markets margin layer live inside the core A
 
 This is a contract foundation, not a live execution system.
 
-- `ConvictionVault` accepts supported ERC20 collateral deposits.
-- Owner-managed collateral policies define whether a token is enabled, its max leverage, max single-intent collateral, maintenance margin, account borrow limit, and account exposure limit.
+- `ConvictionVault` accepts supported ERC20 collateral deposits and requires exact token receipts.
+- Owner-managed collateral policies define whether a token is enabled, its max leverage, max single-intent collateral, maintenance margin, account borrow limit, and account exposure limit. Collateral addresses must be deployed token contracts.
 - Users can create margin intents against an off-chain synced market id.
 - Collateral is locked while an intent is pending or executed. The vault tracks borrowed notional, exposure notional, and health in basis points for each account/collateral pair.
 - Users or authorized operators can cancel pending intents.
+- Ownership transfer is two-step: the current owner nominates a pending owner and the pending owner must accept.
 - The owner can pause new deposits, new intents, and execution marking during incident response while still allowing withdrawals and cancellations.
 - The owner can emergency-cancel pending intents and unlock collateral.
 - Authorized operators can mark an intent failed and unlock collateral.
 - Authorized operators can mark an intent executed only after a real adapter confirms execution.
 - `IConvictionExecutionAdapter` defines the adapter boundary; venue-specific execution must stay outside the vault.
 - Adapter status flows through `SUBMITTED`, `CONFIRMED`, `FAILED`, and `CANCELLED`; direct operator execution marking is not available.
-- Executed intents can be closed by an operator or liquidated only when the account/collateral health is below the active maintenance margin.
+- Executed intents can be closed by an operator or liquidated only when the account/collateral health is below the active maintenance margin. Liquidated collateral is credited to the configured liquidation recipient.
 - Risk accounting is based on submitted intent collateral and leverage. It is not PnL and does not prove a market order filled.
 
 The core API must continue to report `marginExecutionEnabled=false` until real contracts are deployed, funded, monitored, and wired to execution adapters.
@@ -50,12 +51,12 @@ forge script contracts/script/DeployConvictionVault.s.sol \
   --broadcast
 ```
 
-Do not reuse development private keys in production.
+Do not reuse development private keys in production. Before public funds, set a controlled liquidation recipient, call `transferOwnership(multisig)`, and have the multisig call `acceptOwnership()`.
 
 ## Next Contract Work
 
 - Implement real adapter contracts for prediction-market venues.
 - Add oracle/mark-price based health updates before enabling live leverage.
 - Add oracle/price-source validation for collateral and market exposure.
-- Add role handoff to multisig-controlled ownership before public funds.
+- Hand off accepted ownership to a multisig before public funds.
 - Add audit-focused tests and invariant tests before mainnet deployment.
