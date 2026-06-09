@@ -6,6 +6,8 @@ import {
   getActiveContractConfig,
   listContractDeployments,
   listPositionContractTransactions,
+  prepareCollateralApprovalTransaction,
+  prepareCollateralDepositTransaction,
   prepareMarginIntentTransaction,
   updateContractTransaction,
   upsertContractDeployment,
@@ -90,6 +92,46 @@ export async function registerContractRoutes(app: FastifyInstance) {
       const deployment = await upsertContractDeployment(request.body);
 
       return sendSuccess(reply, { deployment }, 201);
+    },
+  );
+
+  app.post<{ Body: Pick<PrepareMarginIntentBody, "positionId"> }>(
+    "/contracts/collateral-approvals/prepare",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["positionId"],
+          properties: {
+            positionId: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const prepared = await prepareCollateralApprovalTransaction(request.body);
+
+      return sendSuccess(reply, prepared, 201);
+    },
+  );
+
+  app.post<{ Body: Pick<PrepareMarginIntentBody, "positionId"> }>(
+    "/contracts/deposits/prepare",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["positionId"],
+          properties: {
+            positionId: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const prepared = await prepareCollateralDepositTransaction(request.body);
+
+      return sendSuccess(reply, prepared, 201);
     },
   );
 

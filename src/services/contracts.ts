@@ -5,6 +5,7 @@ import type {
 } from "@prisma/client";
 import { ContractRole, ExecutionMode, PositionStatus, Prisma } from "@prisma/client";
 
+import { defaultContractDeployments } from "../config/deployed-contracts.js";
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 
@@ -20,6 +21,10 @@ export type UpsertContractDeploymentInput = {
   tokenSymbol?: string | null;
   tokenDecimals?: number | null;
   isActive?: boolean;
+};
+
+export type PrepareCollateralTransactionInput = {
+  positionId: string;
 };
 
 export type PrepareMarginIntentInput = {
@@ -46,7 +51,7 @@ export async function upsertContractDeployment(input: UpsertContractDeploymentIn
   validateChainId(input.chainId);
   validateEvmAddress(input.address, "address");
 
-  if (input.role === ContractRole.COLLATERAL_TOKEN && input.tokenDecimals === null) {
+  if (input.role === ContractRole.COLLATERAL_TOKEN && typeof input.tokenDecimals !== "number") {
     throw new AppError("Collateral token decimals are required", {
       code: "TOKEN_DECIMALS_REQUIRED",
       statusCode: 422,
@@ -94,6 +99,103 @@ export async function getActiveContractConfig(chainId?: number | null) {
   return deployments.map(normalizeContractDeployment);
 }
 
+export async function ensureDefaultContractDeployments() {
+  for (const deployment of defaultContractDeployments) {
+    await upsertContractDeployment({ ...deployment, isActive: true });
+  }
+}
+
+export async function prepareCollateralApprovalTransaction(
+  input: PrepareCollateralTransactionInput,
+) {
+  const { collateralAmount, collateralToken, position, vault } = await getMarginContractContext(
+    input.positionId,
+  );
+
+  const args = [vault.address, collateralAmount] as const;
+  const requestPayload = {
+    functionName: "approve",
+    abi: ["function approve(address spender, uint256 amount) returns (bool)"],
+    args,
+    namedArgs: {
+      spender: vault.address,
+      amount: collateralAmount,
+      collateralToken: collateralToken.address,
+    },
+  } satisfies Prisma.InputJsonObject;
+  const transaction = await prisma.contractTransaction.create({
+    data: {
+      userId: position.userId,
+      positionId: position.id,
+      chainId: position.chainId!,
+      contractAddress: collateralToken.address,
+      walletAddress: position.walletAddress!.toLowerCase(),
+      transactionHash: null,
+      type: "COLLATERAL_APPROVAL",
+      status: "PREPARED",
+      requestPayload,
+      responsePayload: null,
+    },
+  });
+
+  return {
+    transaction: normalizeContractTransaction(transaction),
+    contractCall: {
+      chainId: position.chainId!,
+      contractAddress: collateralToken.address,
+      walletAddress: position.walletAddress!,
+      ...requestPayload,
+    },
+    executionNote:
+      "Approve the vault to spend this collateral amount. This does not deposit funds or execute a market trade.",
+  };
+}
+
+export async function prepareCollateralDepositTransaction(
+  input: PrepareCollateralTransactionInput,
+) {
+  const { collateralAmount, collateralToken, position, vault } = await getMarginContractContext(
+    input.positionId,
+  );
+
+  const args = [collateralToken.address, collateralAmount] as const;
+  const requestPayload = {
+    functionName: "deposit",
+    abi: ["function deposit(address collateralToken, uint256 amount)"],
+    args,
+    namedArgs: {
+      collateralToken: collateralToken.address,
+      amount: collateralAmount,
+    },
+  } satisfies Prisma.InputJsonObject;
+  const transaction = await prisma.contractTransaction.create({
+    data: {
+      userId: position.userId,
+      positionId: position.id,
+      chainId: position.chainId!,
+      contractAddress: vault.address,
+      walletAddress: position.walletAddress!.toLowerCase(),
+      transactionHash: null,
+      type: "DEPOSIT",
+      status: "PREPARED",
+      requestPayload,
+      responsePayload: null,
+    },
+  });
+
+  return {
+    transaction: normalizeContractTransaction(transaction),
+    contractCall: {
+      chainId: position.chainId!,
+      contractAddress: vault.address,
+      walletAddress: position.walletAddress!,
+      ...requestPayload,
+    },
+    executionNote:
+      "Deposit approved collateral into the vault. This creates vault balance only; it does not execute a market trade.",
+  };
+}
+
 export async function prepareMarginIntentTransaction(input: PrepareMarginIntentInput) {
   const maxSlippageBps = input.maxSlippageBps ?? 100;
   const deadline = input.deadline ?? Math.floor(Date.now() / 1000) + 60 * 60;
@@ -112,59 +214,10 @@ export async function prepareMarginIntentTransaction(input: PrepareMarginIntentI
     });
   }
 
-  const position = await prisma.position.findUnique({ where: { id: input.positionId } });
-
-  if (!position) {
-    throw new AppError("Position not found", {
-      code: "POSITION_NOT_FOUND",
-      statusCode: 404,
-    });
-  }
-
-  if (position.executionMode !== ExecutionMode.MARGIN) {
-    throw new AppError("Only margin position intents can be prepared for vault submission", {
-      code: "NOT_MARGIN_POSITION",
-      statusCode: 422,
-    });
-  }
-
-  if (position.status !== PositionStatus.PENDING_EXECUTION) {
-    throw new AppError("Only pending position intents can be prepared for contract submission", {
-      code: "POSITION_NOT_PENDING",
-      statusCode: 422,
-      details: { status: position.status },
-    });
-  }
-
-  if (!position.chainId || !position.walletAddress) {
-    throw new AppError("Position is missing chain or wallet metadata", {
-      code: "POSITION_CONTRACT_METADATA_MISSING",
-      statusCode: 422,
-    });
-  }
-
-  if (!position.marginCollateral || !position.leverageMultiplier) {
-    throw new AppError("Position is missing margin collateral or leverage metadata", {
-      code: "POSITION_MARGIN_METADATA_MISSING",
-      statusCode: 422,
-    });
-  }
-
-  const [vault, collateralToken] = await Promise.all([
-    findActiveDeployment(position.chainId, ContractRole.MARGIN_VAULT),
-    findActiveDeployment(position.chainId, ContractRole.COLLATERAL_TOKEN),
-  ]);
-  const tokenDecimals = collateralToken.tokenDecimals;
-
-  if (typeof tokenDecimals !== "number") {
-    throw new AppError("Active collateral token config is missing decimals", {
-      code: "TOKEN_DECIMALS_REQUIRED",
-      statusCode: 422,
-    });
-  }
-
-  const collateralAmount = decimalToTokenUnits(position.marginCollateral.toString(), tokenDecimals);
-  const leverageBps = decimalToBps(position.leverageMultiplier.toString());
+  const { collateralAmount, collateralToken, position, vault } = await getMarginContractContext(
+    input.positionId,
+  );
+  const leverageBps = decimalToBps(position.leverageMultiplier!.toString());
   const marketId = objectIdToBytes32(position.marketId, "marketId");
   const offchainPositionId = objectIdToBytes32(position.id, "positionId");
   const side = position.side === "YES" ? 0 : 1;
@@ -199,9 +252,9 @@ export async function prepareMarginIntentTransaction(input: PrepareMarginIntentI
     data: {
       userId: position.userId,
       positionId: position.id,
-      chainId: position.chainId,
+      chainId: position.chainId!,
       contractAddress: vault.address,
-      walletAddress: position.walletAddress.toLowerCase(),
+      walletAddress: position.walletAddress!.toLowerCase(),
       transactionHash: null,
       type: "MARGIN_INTENT",
       status: "PREPARED",
@@ -213,9 +266,9 @@ export async function prepareMarginIntentTransaction(input: PrepareMarginIntentI
   return {
     transaction: normalizeContractTransaction(transaction),
     contractCall: {
-      chainId: position.chainId,
+      chainId: position.chainId!,
       contractAddress: vault.address,
-      walletAddress: position.walletAddress,
+      walletAddress: position.walletAddress!,
       ...requestPayload,
     },
     executionNote:
@@ -306,6 +359,66 @@ export function normalizeContractTransaction(transaction: ContractTransaction) {
     responsePayload: transaction.responsePayload,
     createdAt: transaction.createdAt.toISOString(),
     updatedAt: transaction.updatedAt.toISOString(),
+  };
+}
+
+async function getMarginContractContext(positionId: string) {
+  const position = await prisma.position.findUnique({ where: { id: positionId } });
+
+  if (!position) {
+    throw new AppError("Position not found", {
+      code: "POSITION_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  if (position.executionMode !== ExecutionMode.MARGIN) {
+    throw new AppError("Only margin position intents can be prepared for vault submission", {
+      code: "NOT_MARGIN_POSITION",
+      statusCode: 422,
+    });
+  }
+
+  if (position.status !== PositionStatus.PENDING_EXECUTION) {
+    throw new AppError("Only pending position intents can be prepared for contract submission", {
+      code: "POSITION_NOT_PENDING",
+      statusCode: 422,
+      details: { status: position.status },
+    });
+  }
+
+  if (!position.chainId || !position.walletAddress) {
+    throw new AppError("Position is missing chain or wallet metadata", {
+      code: "POSITION_CONTRACT_METADATA_MISSING",
+      statusCode: 422,
+    });
+  }
+
+  if (!position.marginCollateral || !position.leverageMultiplier) {
+    throw new AppError("Position is missing margin collateral or leverage metadata", {
+      code: "POSITION_MARGIN_METADATA_MISSING",
+      statusCode: 422,
+    });
+  }
+
+  const [vault, collateralToken] = await Promise.all([
+    findActiveDeployment(position.chainId, ContractRole.MARGIN_VAULT),
+    findActiveDeployment(position.chainId, ContractRole.COLLATERAL_TOKEN),
+  ]);
+  const tokenDecimals = collateralToken.tokenDecimals;
+
+  if (typeof tokenDecimals !== "number") {
+    throw new AppError("Active collateral token config is missing decimals", {
+      code: "TOKEN_DECIMALS_REQUIRED",
+      statusCode: 422,
+    });
+  }
+
+  return {
+    collateralAmount: decimalToTokenUnits(position.marginCollateral.toString(), tokenDecimals),
+    collateralToken,
+    position,
+    vault,
   };
 }
 

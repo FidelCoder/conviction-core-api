@@ -220,30 +220,29 @@ Start with Base Sepolia for deployment tests. Do not use production funds or cla
 
 ## Contract API
 
-Store active contract deployments before preparing wallet transactions:
+The API syncs the deployed testnet vault and Circle testnet USDC deployment records on startup. The connected testnet chains are:
+
+| Chain            | Vault                                        | Collateral                                   |
+| ---------------- | -------------------------------------------- | -------------------------------------------- |
+| Base Sepolia     | `0xfeBCb5b9bCD90904aa9d6100eDff504A606494E3` | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| Ethereum Sepolia | `0xB1dA85e3867f926f8ED3Aa5954Ab7dd8Db29f605` | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
+| Arbitrum Sepolia | `0xd53cec8fF2d49Fa5Fe3C6dE5408ce996f0A0858c` | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` |
+
+You can still upsert or deactivate deployment records manually with `POST /contracts/config` when a chain changes.
+
+Prepare the wallet flow from a real pending margin position in order:
 
 ```sh
-curl -X POST http://localhost:3000/contracts/config \
+curl -X POST http://localhost:3000/contracts/collateral-approvals/prepare \
   -H 'Content-Type: application/json' \
-  -d '{
-    "chainId": 84532,
-    "role": "MARGIN_VAULT",
-    "address": "0x0000000000000000000000000000000000000000",
-    "label": "Base Sepolia vault"
-  }'
+  -d '{ "positionId": "existing-margin-position-id" }'
 
-curl -X POST http://localhost:3000/contracts/config \
+curl -X POST http://localhost:3000/contracts/deposits/prepare \
   -H 'Content-Type: application/json' \
-  -d '{
-    "chainId": 84532,
-    "role": "COLLATERAL_TOKEN",
-    "address": "0x0000000000000000000000000000000000000000",
-    "tokenSymbol": "USDC",
-    "tokenDecimals": 6
-  }'
+  -d '{ "positionId": "existing-margin-position-id" }'
 ```
 
-Prepare a margin-intent contract call from a real pending margin position:
+Prepare the margin-intent contract call after the collateral approval and deposit transactions confirm:
 
 ```sh
 curl -X POST http://localhost:3000/contracts/margin-intents/prepare \
@@ -254,7 +253,7 @@ curl -X POST http://localhost:3000/contracts/margin-intents/prepare \
   }'
 ```
 
-The prepare endpoint creates a `PREPARED` contract transaction record and returns the vault address, ABI fragment, and arguments for the client wallet. Recording a submitted hash updates transaction tracking only; it does not mark the position as executed. Execution requires adapter confirmation and real venue/on-chain evidence.
+Each prepare endpoint creates a `PREPARED` contract transaction record and returns the target contract, ABI fragment, and arguments for the client wallet. Recording a submitted hash updates transaction tracking only; it does not mark the position as executed. Execution requires adapter confirmation and real venue/on-chain evidence.
 
 ```sh
 curl -X PATCH http://localhost:3000/contracts/transactions/:id \

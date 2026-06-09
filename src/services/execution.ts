@@ -1,6 +1,7 @@
 import type { ExecutionAttempt } from "@prisma/client";
 import { ExecutionAttemptStatus, ExecutionMode, ExecutionTargetType } from "@prisma/client";
 
+import { supportedIntentChains } from "../config/deployed-contracts.js";
 import { env } from "../config/env.js";
 import { AppError } from "../lib/errors.js";
 import { getActiveContractConfig } from "./contracts.js";
@@ -8,31 +9,9 @@ import { prisma } from "../lib/prisma.js";
 
 export const MAX_PENDING_MARGIN_LEVERAGE = 10;
 
-const supportedIntentChains = [
-  {
-    chainId: 8453,
-    chainName: "Base",
-    ecosystem: "EVM" as const,
-    network: "mainnet" as const,
-    spotExecutionEnabled: false,
-    marginExecutionEnabled: false,
-    contractRequiredForMargin: true,
-    plannedAdapters: ["Polymarket CLOB adapter", "Margin vault adapter"],
-  },
-  {
-    chainId: 84532,
-    chainName: "Base Sepolia",
-    ecosystem: "EVM" as const,
-    network: "testnet" as const,
-    spotExecutionEnabled: false,
-    marginExecutionEnabled: false,
-    contractRequiredForMargin: true,
-    plannedAdapters: ["Testnet margin vault adapter", "Execution adapter smoke tests"],
-  },
-];
-
 export async function getExecutionCapabilities() {
   const activeContracts = await getActiveContractConfig(null);
+  const hasActiveVault = activeContracts.some((deployment) => deployment.role === "MARGIN_VAULT");
 
   return {
     evmOnly: true,
@@ -45,17 +24,21 @@ export async function getExecutionCapabilities() {
     maxPendingMarginLeverage: MAX_PENDING_MARGIN_LEVERAGE,
     activeAdapters: [] as string[],
     contractLayer: {
-      status: env.convictionVaultAddress ? "CONFIGURED_NOT_ENABLED" : "PLANNED",
+      status: hasActiveVault
+        ? "TESTNET_VAULTS_CONNECTED_INTENT_ONLY"
+        : env.convictionVaultAddress
+          ? "CONFIGURED_NOT_ENABLED"
+          : "PLANNED",
       vaultAddress: env.convictionVaultAddress,
       executionAdapterAddress: env.convictionExecutionAdapterAddress,
       marginVaultRequired: true,
       contractRepoPath: "contracts/src/ConvictionVault.sol",
       activeContracts,
       notes: [
-        "Contracts are scaffolded in this API repo.",
-        "Vault contract tracks collateral, borrowed notional, exposure notional, and health basis points.",
+        "Testnet vaults are deployed and connected to the wallet transaction preparation flow.",
+        "Wallet flow is approval, deposit, then margin intent creation.",
         "Configured contract addresses do not enable execution by themselves.",
-        "Margin execution remains disabled until deployment, liquidity, monitoring, and adapters are live.",
+        "Margin execution remains disabled until vault liquidity, monitoring, liquidation operations, and adapters are live.",
       ],
     },
     recommendation:

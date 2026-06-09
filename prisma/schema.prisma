@@ -94,6 +94,7 @@ enum ContractTransactionStatus {
 }
 
 enum ContractTransactionType {
+  COLLATERAL_APPROVAL
   DEPOSIT
   MARGIN_INTENT
   CLOSE_INTENT
