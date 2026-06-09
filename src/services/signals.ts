@@ -68,6 +68,15 @@ export async function getTradeSignalById(id: string) {
   return signal ? normalizeTradeSignal(signal) : null;
 }
 
+export async function listRecentTradeSignals(limit = 50) {
+  const signals = await prisma.tradeSignal.findMany({
+    orderBy: { createdAt: "desc" },
+    take: Math.min(Math.max(limit, 1), 100),
+  });
+
+  return signals.map(normalizeTradeSignal);
+}
+
 export async function listMarketTradeSignals(marketId: string) {
   const market = await prisma.market.findUnique({ where: { id: marketId } });
 

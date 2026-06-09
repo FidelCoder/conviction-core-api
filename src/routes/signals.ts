@@ -6,6 +6,7 @@ import { sendSuccess } from "../lib/responses.js";
 import {
   createTradeSignal,
   getTradeSignalById,
+  listRecentTradeSignals,
   listMarketTradeSignals,
   listTraderProfileTradeSignals,
 } from "../services/signals.js";
@@ -20,6 +21,10 @@ type MarketSignalsParams = {
 
 type TraderProfileSignalsParams = {
   traderProfileId: string;
+};
+
+type SignalFeedQuery = {
+  limit?: number;
 };
 
 type CreateSignalBody = {
@@ -58,6 +63,26 @@ export async function registerSignalRoutes(app: FastifyInstance) {
       const signal = await createTradeSignal(request.body);
 
       return sendSuccess(reply, { signal }, 201);
+    },
+  );
+
+  app.get<{ Querystring: SignalFeedQuery }>(
+    "/signals",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            limit: { type: "integer", minimum: 1, maximum: 100 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const signals = await listRecentTradeSignals(request.query.limit);
+
+      return sendSuccess(reply, { signals });
     },
   );
 
