@@ -8,6 +8,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerMarketRoutes } from "./routes/markets.js";
 import { registerPositionRoutes } from "./routes/positions.js";
 import { registerSignalRoutes } from "./routes/signals.js";
+import { registerSocialRoutes } from "./routes/social.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { registerUserRoutes } from "./routes/users.js";
 import { ensureDefaultContractDeployments } from "./services/contracts.js";
@@ -29,6 +30,7 @@ export async function buildApp() {
   await registerUserRoutes(app);
   await registerMarketRoutes(app);
   await registerSignalRoutes(app);
+  await registerSocialRoutes(app);
   await registerPositionRoutes(app);
   await registerStatsRoutes(app);
 
