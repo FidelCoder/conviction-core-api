@@ -72,6 +72,15 @@ enum TradeSignalSource {
   WEB
 }
 
+enum SignalReplyStatus {
+  PUBLISHED
+  HIDDEN
+}
+
+enum SignalReactionType {
+  LIKE
+}
+
 enum CopyTradeStatus {
   PENDING_EXECUTION
   EXECUTED
@@ -112,6 +121,9 @@ model User {
   copiedTrades         CopyTrade[]           @relation("CopyTradeFollower")
   tradingRooms         TradingRoom[]         @relation("TradingRoomOwner")
   contractTransactions ContractTransaction[]
+  signalReplies        SignalReply[]
+  signalReactions      SignalReaction[]
+  signalBookmarks      SignalBookmark[]
 }
 
 model SocialAccount {
@@ -235,6 +247,9 @@ model TradeSignal {
   market          Market            @relation(fields: [marketId], references: [id], onDelete: NoAction)
   room            TradingRoom?      @relation(fields: [roomId], references: [id], onDelete: NoAction)
   copyTrades      CopyTrade[]
+  socialReplies   SignalReply[]
+  socialReactions SignalReaction[]
+  socialBookmarks SignalBookmark[]
 
   @@index([traderProfileId])
   @@index([marketId])
@@ -242,6 +257,53 @@ model TradeSignal {
   @@index([status])
   @@index([source])
   @@index([createdAt])
+}
+
+model SignalReply {
+  id           String            @id @default(auto()) @map("_id") @db.ObjectId
+  signalId     String            @db.ObjectId
+  authorUserId String            @db.ObjectId
+  body         String
+  status       SignalReplyStatus @default(PUBLISHED)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  signal       TradeSignal       @relation(fields: [signalId], references: [id], onDelete: NoAction)
+  author       User              @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
+
+  @@index([signalId])
+  @@index([authorUserId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model SignalReaction {
+  id        String             @id @default(auto()) @map("_id") @db.ObjectId
+  signalId  String             @db.ObjectId
+  userId    String             @db.ObjectId
+  type      SignalReactionType @default(LIKE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  signal    TradeSignal        @relation(fields: [signalId], references: [id], onDelete: NoAction)
+  user      User               @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@unique([signalId, userId, type])
+  @@index([signalId])
+  @@index([userId])
+  @@index([type])
+}
+
+model SignalBookmark {
+  id        String      @id @default(auto()) @map("_id") @db.ObjectId
+  signalId  String      @db.ObjectId
+  userId    String      @db.ObjectId
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  signal    TradeSignal @relation(fields: [signalId], references: [id], onDelete: NoAction)
+  user      User        @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@unique([signalId, userId])
+  @@index([signalId])
+  @@index([userId])
 }
 
 model CopyTrade {
