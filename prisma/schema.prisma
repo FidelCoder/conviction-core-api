@@ -10,6 +10,7 @@ datasource db {
 enum SocialPlatform {
   TELEGRAM
   FARCASTER
+  WEB
 }
 
 enum MarketSource {
