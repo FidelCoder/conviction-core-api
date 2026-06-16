@@ -16,6 +16,7 @@ export type UpsertTraderProfileInput = {
   userId: string;
   handle: string;
   bio?: string | null;
+  avatarUrl?: string | null;
 };
 
 export type UserSession = {
@@ -27,6 +28,7 @@ export type UserSession = {
 export type NormalizedUser = {
   id: string;
   displayName: string | null;
+  email: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -47,6 +49,7 @@ export type NormalizedTraderProfile = {
   userId: string;
   handle: string;
   bio: string | null;
+  avatarUrl: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -169,6 +172,7 @@ export async function upsertTraderProfile(input: UpsertTraderProfileInput) {
         data: {
           handle,
           bio: normalizeNullableString(input.bio),
+          avatarUrl: normalizeNullableStringUpdate(input.avatarUrl),
         },
       });
 
@@ -180,6 +184,7 @@ export async function upsertTraderProfile(input: UpsertTraderProfileInput) {
         userId: input.userId,
         handle,
         bio: normalizeNullableString(input.bio),
+        avatarUrl: normalizeNullableString(input.avatarUrl),
       },
     });
 
@@ -218,6 +223,7 @@ function normalizeUser(user: User): NormalizedUser {
   return {
     id: user.id,
     displayName: user.displayName,
+    email: user.email ?? null,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
   };
@@ -242,6 +248,7 @@ function normalizeTraderProfile(traderProfile: TraderProfile): NormalizedTraderP
     userId: traderProfile.userId,
     handle: traderProfile.handle,
     bio: traderProfile.bio,
+    avatarUrl: traderProfile.avatarUrl ?? null,
     createdAt: traderProfile.createdAt.toISOString(),
     updatedAt: traderProfile.updatedAt.toISOString(),
   };

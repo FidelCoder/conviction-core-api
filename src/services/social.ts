@@ -374,6 +374,7 @@ function normalizeTraderProfile(traderProfile: TraderProfile): NormalizedTraderP
     userId: traderProfile.userId,
     handle: traderProfile.handle,
     bio: traderProfile.bio,
+    avatarUrl: traderProfile.avatarUrl ?? null,
     createdAt: traderProfile.createdAt.toISOString(),
     updatedAt: traderProfile.updatedAt.toISOString(),
   };

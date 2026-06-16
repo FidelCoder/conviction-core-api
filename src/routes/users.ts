@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 
 import { AppError } from "../lib/errors.js";
 import { sendSuccess } from "../lib/responses.js";
+import { prisma } from "../lib/prisma.js";
 import {
   createOrFetchSocialAccount,
   getTraderProfileById,
@@ -22,6 +23,7 @@ type TraderProfileBody = {
   userId: string;
   handle: string;
   bio?: string | null;
+  avatarUrl?: string | null;
 };
 
 type TraderProfileParams = {
@@ -60,23 +62,54 @@ export async function registerUserRoutes(app: FastifyInstance) {
   app.post<{ Body: TraderProfileBody }>(
     "/trader-profiles",
     {
-      schema: {
-        body: {
-          type: "object",
-          required: ["userId", "handle"],
-          additionalProperties: false,
-          properties: {
-            userId: { type: "string", minLength: 1 },
-            handle: { type: "string", minLength: 2, maxLength: 32 },
-            bio: { type: "string", maxLength: 280, nullable: true },
+      schema: {          body: {
+            type: "object",
+            required: ["userId", "handle"],
+            additionalProperties: false,
+            properties: {
+              userId: { type: "string", minLength: 1 },
+              handle: { type: "string", minLength: 2, maxLength: 32 },
+              bio: { type: "string", maxLength: 280, nullable: true },
+              avatarUrl: { type: "string", maxLength: 1024, nullable: true },
+            },
           },
-        },
       },
     },
     async (request, reply) => {
       const traderProfile = await upsertTraderProfile(request.body);
 
       return sendSuccess(reply, { traderProfile }, 201);
+    },
+  );
+
+  app.patch<{ Params: TraderProfileParams; Body: { email: string } }>(
+    "/users/:id/email",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: { type: "string", minLength: 1 },
+          },
+        },
+        body: {
+          type: "object",
+          required: ["email"],
+          additionalProperties: false,
+          properties: {
+            email: { type: "string", minLength: 3, maxLength: 256 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const user = await prisma.user.update({
+        where: { id: request.params.id },
+        data: { email: request.body.email },
+      });
+
+      return sendSuccess(reply, { email: user.email });
     },
   );
 
