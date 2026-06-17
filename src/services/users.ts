@@ -54,7 +54,8 @@ export type NormalizedTraderProfile = {
   updatedAt: string;
 };
 
-const handlePattern = /^[a-zA-Z0-9_][a-zA-Z0-9_.-]{1,31}$/;
+const handlePattern = /^[a-z0-9_][a-z0-9_.-]{1,39}\.viction$/;
+const victionSuffix = ".viction";
 
 export async function createOrFetchSocialAccount(input: CreateOrFetchSocialAccountInput) {
   const platformUserId = input.platformUserId.trim();
@@ -140,11 +141,11 @@ export async function createOrFetchSocialAccount(input: CreateOrFetchSocialAccou
 }
 
 export async function upsertTraderProfile(input: UpsertTraderProfileInput) {
-  const handle = input.handle.trim();
+  const handle = normalizeVictionHandle(input.handle);
 
   if (!handlePattern.test(handle)) {
     throw new AppError(
-      "Handle must be 2 to 32 characters and use letters, numbers, underscores, dots, or dashes",
+      "Handle must end in .viction and use letters, numbers, underscores, dots, or dashes",
       {
         code: "INVALID_TRADER_HANDLE",
         statusCode: 422,
@@ -266,4 +267,11 @@ function normalizeNullableString(value: string | null | undefined) {
 
 function normalizeNullableStringUpdate(value: string | null | undefined) {
   return typeof value === "undefined" ? undefined : normalizeNullableString(value);
+}
+
+function normalizeVictionHandle(value: string) {
+  const trimmed = value.trim().toLowerCase();
+  const base = trimmed.endsWith(victionSuffix) ? trimmed.slice(0, -victionSuffix.length) : trimmed;
+
+  return base + victionSuffix;
 }

@@ -62,17 +62,18 @@ export async function registerUserRoutes(app: FastifyInstance) {
   app.post<{ Body: TraderProfileBody }>(
     "/trader-profiles",
     {
-      schema: {          body: {
-            type: "object",
-            required: ["userId", "handle"],
-            additionalProperties: false,
-            properties: {
-              userId: { type: "string", minLength: 1 },
-              handle: { type: "string", minLength: 2, maxLength: 32 },
-              bio: { type: "string", maxLength: 280, nullable: true },
-              avatarUrl: { type: "string", maxLength: 1024, nullable: true },
-            },
+      schema: {
+        body: {
+          type: "object",
+          required: ["userId", "handle"],
+          additionalProperties: false,
+          properties: {
+            userId: { type: "string", minLength: 1 },
+            handle: { type: "string", minLength: 2, maxLength: 48 },
+            bio: { type: "string", maxLength: 280, nullable: true },
+            avatarUrl: { type: "string", maxLength: 1024, nullable: true },
           },
+        },
       },
     },
     async (request, reply) => {
