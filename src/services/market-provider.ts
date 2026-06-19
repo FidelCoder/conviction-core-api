@@ -21,6 +21,7 @@ export type ProviderMarketInput = {
   lastTradePrice?: string | number | null;
   bestBid?: string | number | null;
   bestAsk?: string | number | null;
+  providerMetadata?: string | null;
 };
 
 export type MarketProvider = {

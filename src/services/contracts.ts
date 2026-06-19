@@ -313,7 +313,11 @@ export async function updateContractTransaction(id: string, input: RecordContrac
   if (updated.positionId && updated.transactionHash) {
     await prisma.position.update({
       where: { id: updated.positionId },
-      data: { chainTransactionHash: updated.transactionHash },
+      data: {
+        chainTransactionHash: updated.transactionHash,
+        status: mapContractTransactionStatusToPositionStatus(updated.status),
+        openedAt: updated.status === "CONFIRMED" ? (existing.createdAt ?? new Date()) : undefined,
+      },
     });
   }
 
@@ -502,4 +506,12 @@ function validateEvmAddress(value: string, field: string) {
       details: { field },
     });
   }
+}
+
+
+function mapContractTransactionStatusToPositionStatus(status: ContractTransactionStatus) {
+  if (status === "CONFIRMED") return "EXECUTED";
+  if (status === "FAILED" || status === "CANCELLED") return "FAILED";
+
+  return "PENDING_EXECUTION";
 }

@@ -177,6 +177,7 @@ model Market {
   lastTradePrice        String?
   bestBid               String?
   bestAsk               String?
+  providerMetadata      String?
   syncedAt              DateTime?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
