@@ -18,6 +18,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   POLYMARKET_GAMMA_API_URL: z.string().url().default("https://gamma-api.polymarket.com"),
   POLYMARKET_MARKETS_SYNC_LIMIT: z.coerce.number().int().positive().max(500).default(250),
+  MARKET_SYNC_TOKEN: z.string().min(24).optional(),
   CONVICTION_VAULT_ADDRESS: optionalEvmAddress,
   CONVICTION_EXECUTION_ADAPTER_ADDRESS: optionalEvmAddress,
 });
@@ -38,6 +39,7 @@ export const env = {
   databaseUrl: parsedEnv.data.DATABASE_URL,
   polymarketGammaApiUrl: parsedEnv.data.POLYMARKET_GAMMA_API_URL,
   polymarketMarketsSyncLimit: parsedEnv.data.POLYMARKET_MARKETS_SYNC_LIMIT,
+  marketSyncToken: parsedEnv.data.MARKET_SYNC_TOKEN ?? null,
   convictionVaultAddress: parsedEnv.data.CONVICTION_VAULT_ADDRESS ?? null,
   convictionExecutionAdapterAddress: parsedEnv.data.CONVICTION_EXECUTION_ADAPTER_ADDRESS ?? null,
 };
