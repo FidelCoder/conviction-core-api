@@ -44,8 +44,13 @@ export type NormalizedMarket = {
 };
 
 export type MarketProviderMetadata = {
+  eventSlug?: string | null;
+  eventTitle?: string | null;
   liquidity?: string | null;
   oneDayPriceChange?: string | null;
+  primaryTag?: string | null;
+  tagLabels?: string[];
+  tagSlugs?: string[];
   totalVolume?: string | null;
   volume1mo?: string | null;
   volume1wk?: string | null;
@@ -230,16 +235,47 @@ async function upsertProviderMarket(providerMarket: ProviderMarketInput) {
     syncedAt,
   };
 
-  return prisma.market.upsert({
+  const existingMarket = await prisma.market.findUnique({
     where: {
       source_externalMarketId: {
         source: providerMarket.source,
         externalMarketId: providerMarket.externalMarketId,
       },
     },
-    create: marketData,
-    update: marketData,
   });
+
+  if (existingMarket) {
+    return prisma.market.update({
+      where: { id: existingMarket.id },
+      data: marketData,
+    });
+  }
+
+  try {
+    return await prisma.market.create({ data: marketData });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const market = await prisma.market.findUnique({
+      where: {
+        source_externalMarketId: {
+          source: providerMarket.source,
+          externalMarketId: providerMarket.externalMarketId,
+        },
+      },
+    });
+
+    if (!market) {
+      throw error;
+    }
+
+    return prisma.market.update({
+      where: { id: market.id },
+      data: marketData,
+    });
+  }
 }
 
 function normalizeOptionalDecimalString(value: string | number | null | undefined) {
@@ -250,6 +286,10 @@ function normalizeOptionalDecimalString(value: string | number | null | undefine
   const normalized = String(value).trim();
 
   return normalized.length > 0 ? normalized : null;
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
 }
 
 
@@ -273,6 +313,7 @@ function buildSearchWhere(search: string) {
       { title: { contains: query, mode: "insensitive" as const } },
       { description: { contains: query, mode: "insensitive" as const } },
       { category: { contains: query, mode: "insensitive" as const } },
+      { providerMetadata: { contains: query, mode: "insensitive" as const } },
     ],
   };
 }
@@ -303,8 +344,13 @@ function parseProviderMetadata(value: string | null): MarketProviderMetadata {
     const parsed = JSON.parse(value) as Record<string, unknown>;
 
     return {
+      eventSlug: normalizeMetadataString(parsed.eventSlug),
+      eventTitle: normalizeMetadataString(parsed.eventTitle),
       liquidity: normalizeMetadataString(parsed.liquidity),
       oneDayPriceChange: normalizeMetadataString(parsed.oneDayPriceChange),
+      primaryTag: normalizeMetadataString(parsed.primaryTag),
+      tagLabels: normalizeMetadataStringArray(parsed.tagLabels),
+      tagSlugs: normalizeMetadataStringArray(parsed.tagSlugs),
       totalVolume: normalizeMetadataString(parsed.totalVolume),
       volume1mo: normalizeMetadataString(parsed.volume1mo),
       volume1wk: normalizeMetadataString(parsed.volume1wk),
@@ -318,6 +364,12 @@ function parseProviderMetadata(value: string | null): MarketProviderMetadata {
 
 function normalizeMetadataString(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function normalizeMetadataStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
 }
 
 async function fetchPolymarketPriceHistory(tokenId: string, range: MarketHistoryRange) {

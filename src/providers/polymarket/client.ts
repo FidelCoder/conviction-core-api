@@ -3,6 +3,12 @@ import { z } from "zod";
 
 import type { MarketProvider, ProviderMarketInput } from "../../services/market-provider.js";
 
+const gammaTagSchema = z.object({
+  id: z.union([z.string(), z.number()]).transform(String),
+  label: z.string().nullable().optional(),
+  slug: z.string().nullable().optional(),
+});
+
 const gammaMarketSchema = z.object({
   id: z.union([z.string(), z.number()]).transform(String),
   question: z.string().min(1),
@@ -53,6 +59,7 @@ const gammaEventSchema = z.object({
   volume1yr: z.union([z.string(), z.number()]).nullable().optional(),
   liquidity: z.union([z.string(), z.number()]).nullable().optional(),
   markets: z.array(gammaMarketSchema).optional(),
+  tags: z.array(gammaTagSchema).optional(),
 });
 
 const gammaMarketListSchema = z.array(gammaMarketSchema);
@@ -60,6 +67,27 @@ const gammaEventListSchema = z.array(gammaEventSchema);
 
 type GammaMarket = z.infer<typeof gammaMarketSchema>;
 type GammaEvent = z.infer<typeof gammaEventSchema>;
+type GammaTag = z.infer<typeof gammaTagSchema>;
+
+const discoveryEventLanes = [
+  { label: "World Cup", tagIds: ["519", "102232", "102350"], eventLimit: 16, marketLimit: 36, perEventMarketLimit: 7 },
+  { label: "Sports", tagIds: ["1"], eventLimit: 18, marketLimit: 32, perEventMarketLimit: 3 },
+  { label: "Esports", tagIds: ["64"], eventLimit: 12, marketLimit: 24, perEventMarketLimit: 4 },
+  { label: "Geopolitics", tagIds: ["100265", "842", "1396"], eventLimit: 12, marketLimit: 28, perEventMarketLimit: 4 },
+  { label: "Politics", tagIds: ["2"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
+  { label: "Crypto", tagIds: ["21"], eventLimit: 12, marketLimit: 28, perEventMarketLimit: 4 },
+  { label: "Finance", tagIds: ["120"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
+  { label: "Tech", tagIds: ["1401"], eventLimit: 8, marketLimit: 18, perEventMarketLimit: 4 },
+  { label: "Soccer", tagIds: ["100350"], eventLimit: 10, marketLimit: 18, perEventMarketLimit: 3 },
+  { label: "World", tagIds: ["101970"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
+] as const;
+
+type EventCollectionOptions = {
+  eventLimit: number;
+  marketLimit: number;
+  perEventMarketLimit: number;
+  seenEventIds: Set<string>;
+};
 
 export class PolymarketProviderError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -126,17 +154,73 @@ export class PolymarketProvider implements MarketProvider {
 
   private async listMarketsFromEvents() {
     const markets = new Map<string, ProviderMarketInput>();
-    const pageSize = Math.min(100, this.listLimit);
+    const seenEventIds = new Set<string>();
 
-    for (let offset = 0; markets.size < this.listLimit; offset += pageSize) {
+    for (const lane of discoveryEventLanes) {
+      if (markets.size >= this.listLimit) {
+        break;
+      }
+
+      const laneMarketLimit = getScaledLaneMarketLimit(lane.marketLimit, this.listLimit);
+      let laneMarketCount = 0;
+
+      for (const tagId of lane.tagIds) {
+        if (markets.size >= this.listLimit || laneMarketCount >= laneMarketLimit) {
+          break;
+        }
+
+        laneMarketCount += await this.collectMarketsFromEvents(
+          markets,
+          {
+            tag_id: tagId,
+            related_tags: "true",
+          },
+          {
+            eventLimit: lane.eventLimit,
+            marketLimit: laneMarketLimit - laneMarketCount,
+            perEventMarketLimit: lane.perEventMarketLimit,
+            seenEventIds,
+          },
+        );
+      }
+    }
+
+    if (markets.size < this.listLimit) {
+      await this.collectMarketsFromEvents(markets, {}, {
+        eventLimit: this.listLimit,
+        marketLimit: this.listLimit - markets.size,
+        perEventMarketLimit: 5,
+        seenEventIds,
+      });
+    }
+
+    return Array.from(markets.values());
+  }
+
+  private async collectMarketsFromEvents(
+    markets: Map<string, ProviderMarketInput>,
+    extraParams: Record<string, string>,
+    options: EventCollectionOptions,
+  ) {
+    const pageSize = Math.min(50, Math.max(10, options.eventLimit));
+    let addedMarkets = 0;
+    let scannedEvents = 0;
+
+    for (
+      let offset = 0;
+      markets.size < this.listLimit && scannedEvents < options.eventLimit && addedMarkets < options.marketLimit;
+      offset += pageSize
+    ) {
+      const remainingEvents = options.eventLimit - scannedEvents;
       const url = this.buildUrl("/events", {
         active: "true",
         closed: "false",
         archived: "false",
-        limit: String(pageSize),
+        limit: String(Math.min(pageSize, remainingEvents)),
         offset: String(offset),
         order: "volume_24hr",
         ascending: "false",
+        ...extraParams,
       });
       const payload = await this.fetchJson(url);
       const parsed = gammaEventListSchema.safeParse(payload);
@@ -153,21 +237,20 @@ export class PolymarketProvider implements MarketProvider {
       }
 
       for (const event of parsed.data) {
-        for (const market of event.markets ?? []) {
-          const mapped = mapGammaMarket(market, event);
-
-          if (!isTradableMarket(mapped)) {
-            continue;
-          }
-
-          markets.set(mapped.externalMarketId, mapped);
-
-          if (markets.size >= this.listLimit) {
-            break;
-          }
+        if (options.seenEventIds.has(event.id)) {
+          continue;
         }
 
-        if (markets.size >= this.listLimit) {
+        options.seenEventIds.add(event.id);
+        scannedEvents += 1;
+        addedMarkets += addEventMarkets(
+          markets,
+          event,
+          Math.min(options.perEventMarketLimit, options.marketLimit - addedMarkets),
+          this.listLimit,
+        );
+
+        if (markets.size >= this.listLimit || scannedEvents >= options.eventLimit || addedMarkets >= options.marketLimit) {
           break;
         }
       }
@@ -177,7 +260,7 @@ export class PolymarketProvider implements MarketProvider {
       }
     }
 
-    return Array.from(markets.values());
+    return addedMarkets;
   }
 
   private async listMarketsDirectly() {
@@ -249,9 +332,17 @@ export function mapGammaMarket(market: GammaMarket, event?: GammaEvent): Provide
   const volume1yr = firstDefined(market.volume1yr, event?.volume1yr);
   const totalVolume = firstDefined(market.volume, event?.volume);
   const liquidity = firstDefined(market.liquidityClob, market.liquidity, event?.liquidity);
+  const tagLabels = getTagLabels(event?.tags);
+  const tagSlugs = getTagSlugs(event?.tags);
+  const primaryTag = getPrimaryEventTag(market, event, tagLabels, tagSlugs);
   const metadata = buildMarketMetadata({
+    eventSlug: event?.slug ?? null,
+    eventTitle: event?.title ?? null,
     liquidity,
     oneDayPriceChange: market.oneDayPriceChange,
+    primaryTag,
+    tagLabels,
+    tagSlugs,
     totalVolume,
     volume1mo,
     volume1wk,
@@ -264,7 +355,7 @@ export function mapGammaMarket(market: GammaMarket, event?: GammaEvent): Provide
     source: MarketSource.POLYMARKET,
     title: market.question,
     description: market.description ?? null,
-    category: getMarketCategory(market, event),
+    category: getMarketCategory(market, event, primaryTag),
     status: mapMarketStatus(market),
     resolutionDate: parseDate(market.endDate ?? market.endDateIso),
     externalUrl: slug ? "https://polymarket.com/market/" + slug : null,
@@ -339,17 +430,67 @@ function firstDefined<TValue>(...values: Array<TValue | null | undefined>) {
   return values.find((value) => value !== null && typeof value !== "undefined") ?? null;
 }
 
-function getMarketCategory(market: GammaMarket, event?: GammaEvent) {
-  return market.category ?? event?.title ?? market.events?.[0]?.title ?? null;
+function getMarketCategory(market: GammaMarket, event?: GammaEvent, primaryTag?: string | null) {
+  return primaryTag ?? market.category ?? getFirstTagLabel(event?.tags) ?? event?.title ?? market.events?.[0]?.title ?? null;
 }
 
 function isTradableMarket(market: ProviderMarketInput) {
   return market.status === MarketStatus.ACTIVE && Boolean(market.yesTokenId);
 }
 
+function addEventMarkets(
+  markets: Map<string, ProviderMarketInput>,
+  event: GammaEvent,
+  perEventMarketLimit: number,
+  totalMarketLimit: number,
+) {
+  let addedFromEvent = 0;
+
+  for (const market of getRankedEventMarkets(event)) {
+    if (perEventMarketLimit <= 0) {
+      break;
+    }
+
+    const mapped = mapGammaMarket(market, event);
+
+    if (!isTradableMarket(mapped) || markets.has(mapped.externalMarketId)) {
+      continue;
+    }
+
+    markets.set(mapped.externalMarketId, mapped);
+    addedFromEvent += 1;
+
+    if (addedFromEvent >= perEventMarketLimit || markets.size >= totalMarketLimit) {
+      break;
+    }
+  }
+
+  return addedFromEvent;
+}
+
+function getScaledLaneMarketLimit(baseLimit: number, totalLimit: number) {
+  return Math.max(4, Math.ceil((baseLimit / 250) * totalLimit));
+}
+
+function getRankedEventMarkets(event: GammaEvent) {
+  return [...(event.markets ?? [])].sort((left, right) => getGammaMarketScore(right) - getGammaMarketScore(left));
+}
+
+function getGammaMarketScore(market: GammaMarket) {
+  return (
+    Number(firstDefined(market.volume24hr, market.volume1wk, market.volume1mo, market.volume1yr, market.volume) ?? 0) +
+    Number(firstDefined(market.liquidityClob, market.liquidity) ?? 0) / 100
+  );
+}
+
 function buildMarketMetadata(input: {
+  eventSlug: string | null;
+  eventTitle: string | null;
   liquidity: string | number | null;
   oneDayPriceChange: string | number | null | undefined;
+  primaryTag: string | null;
+  tagLabels: string[];
+  tagSlugs: string[];
   totalVolume: string | number | null;
   volume1mo: string | number | null;
   volume1wk: string | number | null;
@@ -357,8 +498,13 @@ function buildMarketMetadata(input: {
   volume24hr: string | number | null;
 }) {
   const metadata = {
+    eventSlug: input.eventSlug,
+    eventTitle: input.eventTitle,
     liquidity: normalizeNumericString(input.liquidity),
     oneDayPriceChange: normalizeNumericString(input.oneDayPriceChange),
+    primaryTag: input.primaryTag,
+    tagLabels: input.tagLabels,
+    tagSlugs: input.tagSlugs,
     totalVolume: normalizeNumericString(input.totalVolume),
     volume1mo: normalizeNumericString(input.volume1mo),
     volume1wk: normalizeNumericString(input.volume1wk),
@@ -374,4 +520,56 @@ function normalizeNumericString(value: string | number | null | undefined) {
   const parsed = Number(value);
 
   return Number.isFinite(parsed) ? String(parsed) : null;
+}
+
+function getTagLabels(tags: GammaTag[] | undefined) {
+  return getDedupeTags(tags, "label");
+}
+
+function getTagSlugs(tags: GammaTag[] | undefined) {
+  return getDedupeTags(tags, "slug");
+}
+
+function getDedupeTags(tags: GammaTag[] | undefined, key: "label" | "slug") {
+  return Array.from(
+    new Set(
+      (tags ?? [])
+        .map((tag) => tag[key]?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function getFirstTagLabel(tags: GammaTag[] | undefined) {
+  return getTagLabels(tags)[0] ?? null;
+}
+
+function getPrimaryEventTag(
+  market: GammaMarket,
+  event: GammaEvent | undefined,
+  tagLabels: string[],
+  tagSlugs: string[],
+) {
+  const text = [market.question, market.category, market.description, event?.title, ...tagLabels, ...tagSlugs]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (matchesAny(text, ["world cup", "fifa world cup", "2026-fifa-world-cup", "fifa-world-cup"])) return "World Cup";
+  if (matchesAny(text, ["esports", "counter-strike", "cs2", "league of legends", "valorant", "dota"])) return "Esports";
+  if (matchesAny(text, ["geopolitics", "foreign affairs", "international affairs", "nato", "hormuz"])) return "Geopolitics";
+  if (matchesAny(text, ["crypto", "bitcoin", "btc", "ethereum", "solana", "airdrop"])) return "Crypto";
+  if (matchesAny(text, ["finance", "business", "earnings", "ipo", "stocks", "fed", "rates"])) return "Finance";
+  if (matchesAny(text, ["election", "elections", "politics", "president", "parliament", "government"])) return "Politics";
+  if (matchesAny(text, ["tech", "technology", "openai", " ai ", "nvidia", "startup"])) return "Tech";
+  if (matchesAny(text, ["weather", "hurricane", "temperature", "rain", "flood", "wildfire"])) return "Weather";
+  if (matchesAny(text, ["culture", "pop culture", "movie", "music", "album", "celebrity"])) return "Culture";
+  if (matchesAny(text, ["economy", "inflation", "gdp", "recession", "tariff"])) return "Economy";
+  if (matchesAny(text, ["sports", "soccer", "nba", "nfl", "mlb", "nhl", "cricket", "ufc"])) return "Sports";
+
+  return null;
+}
+
+function matchesAny(text: string, terms: string[]) {
+  return terms.some((term) => text.includes(term));
 }

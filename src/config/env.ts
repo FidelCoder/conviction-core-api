@@ -17,7 +17,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   DATABASE_URL: z.string().url(),
   POLYMARKET_GAMMA_API_URL: z.string().url().default("https://gamma-api.polymarket.com"),
-  POLYMARKET_MARKETS_SYNC_LIMIT: z.coerce.number().int().positive().max(500).default(50),
+  POLYMARKET_MARKETS_SYNC_LIMIT: z.coerce.number().int().positive().max(500).default(250),
   CONVICTION_VAULT_ADDRESS: optionalEvmAddress,
   CONVICTION_EXECUTION_ADAPTER_ADDRESS: optionalEvmAddress,
 });
