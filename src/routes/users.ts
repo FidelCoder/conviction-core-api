@@ -6,6 +6,7 @@ import { sendSuccess } from "../lib/responses.js";
 import { prisma } from "../lib/prisma.js";
 import {
   createOrFetchSocialAccount,
+  discoverUsers,
   getTraderProfileById,
   upsertTraderProfile,
 } from "../services/users.js";
@@ -30,9 +31,37 @@ type TraderProfileParams = {
   id: string;
 };
 
+type UsersQuery = {
+  limit?: number;
+  query?: string;
+  viewerUserId?: string;
+};
+
 const platformValues = Object.values(SocialPlatform);
 
 export async function registerUserRoutes(app: FastifyInstance) {
+  app.get<{ Querystring: UsersQuery }>(
+    "/users",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            limit: { type: "integer", minimum: 1, maximum: 100 },
+            query: { type: "string", minLength: 1, maxLength: 120 },
+            viewerUserId: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const users = await discoverUsers(request.query);
+
+      return sendSuccess(reply, { users });
+    },
+  );
+
   app.post<{ Body: SocialAccountBody }>(
     "/social-accounts",
     {

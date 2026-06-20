@@ -25,6 +25,28 @@ export type UserSession = {
   traderProfile: NormalizedTraderProfile | null;
 };
 
+export type DiscoverUsersOptions = {
+  limit?: number;
+  query?: string;
+  viewerUserId?: string;
+};
+
+export type DiscoveredUser = {
+  user: NormalizedUser;
+  socialAccount: NormalizedSocialAccount | null;
+  traderProfile: NormalizedTraderProfile | null;
+  stats: {
+    followers: number;
+    following: number;
+    publicSignals: number;
+    publicPositions: number;
+  };
+  viewer: {
+    isSelf: boolean;
+    following: boolean;
+  } | null;
+};
+
 export type NormalizedUser = {
   id: string;
   displayName: string | null;
@@ -208,6 +230,82 @@ export async function getTraderProfileById(id: string) {
   return traderProfile ? normalizeTraderProfile(traderProfile) : null;
 }
 
+export async function discoverUsers(options: DiscoverUsersOptions = {}) {
+  const limit = clampUserLimit(options.limit);
+  const query = options.query?.trim();
+  const where: Prisma.UserWhereInput = query
+    ? {
+        OR: [
+          { displayName: { contains: query, mode: "insensitive" } },
+          { traderProfile: { is: { handle: { contains: query, mode: "insensitive" } } } },
+          { socialAccounts: { some: { username: { contains: query, mode: "insensitive" } } } },
+        ],
+      }
+    : {};
+
+  const users = await prisma.user.findMany({
+    where,
+    include: {
+      socialAccounts: true,
+      traderProfile: true,
+      _count: {
+        select: {
+          followerUsers: true,
+          followingUsers: true,
+          positions: { where: { visibility: "PUBLIC" } },
+        },
+      },
+    },
+    orderBy: { updatedAt: "desc" },
+    take: limit,
+  });
+
+  const viewerFollowing = options.viewerUserId
+    ? new Set(
+        (
+          await prisma.userFollow.findMany({
+            where: { followerId: options.viewerUserId },
+            select: { followingId: true },
+          })
+        ).map((follow) => follow.followingId),
+      )
+    : null;
+
+  const traderProfileIds = users
+    .map((user) => user.traderProfile?.id)
+    .filter((id): id is string => Boolean(id));
+  const signalCounts = traderProfileIds.length > 0
+    ? await prisma.tradeSignal.groupBy({
+        by: ["traderProfileId"],
+        where: { traderProfileId: { in: traderProfileIds } },
+        _count: { _all: true },
+      })
+    : [];
+  const signalCountByTrader = new Map(signalCounts.map((item) => [item.traderProfileId, item._count._all]));
+
+  return users.map((user): DiscoveredUser => {
+    const socialAccount = pickPrimarySocialAccount(user.socialAccounts);
+
+    return {
+      user: { ...normalizeUser(user), email: null },
+      socialAccount: socialAccount ? normalizeSocialAccount(socialAccount) : null,
+      traderProfile: user.traderProfile ? normalizeTraderProfile(user.traderProfile) : null,
+      stats: {
+        followers: user._count.followerUsers,
+        following: user._count.followingUsers,
+        publicSignals: user.traderProfile ? signalCountByTrader.get(user.traderProfile.id) ?? 0 : 0,
+        publicPositions: user._count.positions,
+      },
+      viewer: options.viewerUserId
+        ? {
+            isSelf: user.id === options.viewerUserId,
+            following: viewerFollowing?.has(user.id) ?? false,
+          }
+        : null,
+    };
+  });
+}
+
 function normalizeUserSession(
   user: User,
   socialAccount: SocialAccount,
@@ -243,6 +341,10 @@ function normalizeSocialAccount(socialAccount: SocialAccount): NormalizedSocialA
   };
 }
 
+function pickPrimarySocialAccount(accounts: SocialAccount[]) {
+  return accounts.find((account) => account.platform === SocialPlatform.FARCASTER) ?? accounts[0] ?? null;
+}
+
 function normalizeTraderProfile(traderProfile: TraderProfile): NormalizedTraderProfile {
   return {
     id: traderProfile.id,
@@ -274,4 +376,8 @@ function normalizeVictionHandle(value: string) {
   const base = trimmed.endsWith(victionSuffix) ? trimmed.slice(0, -victionSuffix.length) : trimmed;
 
   return base + victionSuffix;
+}
+
+function clampUserLimit(value: number | undefined) {
+  return Number.isInteger(value) && value && value > 0 ? Math.min(value, 100) : 50;
 }

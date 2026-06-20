@@ -21,6 +21,8 @@ const envSchema = z.object({
   MARKET_SYNC_TOKEN: z.string().min(24).optional(),
   CONVICTION_VAULT_ADDRESS: optionalEvmAddress,
   CONVICTION_EXECUTION_ADAPTER_ADDRESS: optionalEvmAddress,
+  TELEGRAM_BOT_TOKEN: z.string().min(8).optional(),
+  TELEGRAM_SUPPORT_CHAT_ID: z.string().min(1).optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -42,4 +44,6 @@ export const env = {
   marketSyncToken: parsedEnv.data.MARKET_SYNC_TOKEN ?? null,
   convictionVaultAddress: parsedEnv.data.CONVICTION_VAULT_ADDRESS ?? null,
   convictionExecutionAdapterAddress: parsedEnv.data.CONVICTION_EXECUTION_ADAPTER_ADDRESS ?? null,
+  telegramBotToken: parsedEnv.data.TELEGRAM_BOT_TOKEN ?? null,
+  telegramSupportChatId: parsedEnv.data.TELEGRAM_SUPPORT_CHAT_ID ?? null,
 };

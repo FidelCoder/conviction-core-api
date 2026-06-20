@@ -10,6 +10,7 @@ import {
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { isSupportedExecutionIntentChain, MAX_PENDING_MARGIN_LEVERAGE } from "./execution.js";
+import { notifyFollowersOfPublicPosition } from "./social.js";
 
 const decimalInputPattern = /^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/;
 const evmAddressPattern = /^0x[a-fA-F0-9]{40}$/;
@@ -30,6 +31,7 @@ export type CreatePositionInput = {
   leverageMultiplier?: string | null;
   marginCollateral?: string | null;
   idempotencyKey?: string | null;
+  visibility?: "PUBLIC" | "PRIVATE" | null;
 };
 
 export type CreateCopyTradeInput = {
@@ -60,6 +62,7 @@ export type NormalizedPosition = {
   chainTransactionHash: string | null;
   idempotencyKey: string | null;
   status: Position["status"];
+  visibility: string;
   openedAt: string | null;
   closedAt: string | null;
   createdAt: string;
@@ -130,9 +133,14 @@ export async function createPosition(input: CreatePositionInput) {
       observedMarketPriceAt: observedPrice.observedAt,
       ...executionMetadata,
       status: PositionStatus.PENDING_EXECUTION,
+      visibility: normalizeVisibility(input.visibility),
       openedAt: null,
     },
   });
+
+  if (position.visibility === "PUBLIC") {
+    await notifyFollowersOfPublicPosition(position.id);
+  }
 
   return normalizePosition(position);
 }
@@ -177,7 +185,7 @@ export async function listTraderProfilePositions(traderProfileId: string) {
   }
 
   const positions = await prisma.position.findMany({
-    where: { userId: traderProfile.userId },
+    where: { userId: traderProfile.userId, visibility: "PUBLIC" },
     orderBy: { createdAt: "desc" },
   });
 
@@ -310,6 +318,7 @@ export function normalizePosition(position: Position): NormalizedPosition {
     chainTransactionHash: position.chainTransactionHash,
     idempotencyKey: position.idempotencyKey,
     status: position.status,
+    visibility: position.visibility ?? "PRIVATE",
     openedAt: position.openedAt?.toISOString() ?? null,
     closedAt: position.closedAt?.toISOString() ?? null,
     createdAt: position.createdAt.toISOString(),
@@ -346,6 +355,10 @@ export function normalizeCopyTrade(copyTrade: CopyTrade): NormalizedCopyTrade {
     createdAt: copyTrade.createdAt.toISOString(),
     updatedAt: copyTrade.updatedAt.toISOString(),
   };
+}
+
+function normalizeVisibility(value: CreatePositionInput["visibility"]) {
+  return value === "PUBLIC" ? "PUBLIC" : "PRIVATE";
 }
 
 function buildExecutionMetadata(input: CreatePositionInput) {

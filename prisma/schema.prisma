@@ -126,6 +126,14 @@ model User {
   signalReplies        SignalReply[]
   signalReactions      SignalReaction[]
   signalBookmarks      SignalBookmark[]
+  followingUsers       UserFollow[]          @relation("UserFollowFollower")
+  followerUsers        UserFollow[]          @relation("UserFollowFollowing")
+  notifications        UserNotification[]    @relation("NotificationRecipient")
+  triggeredNotifications UserNotification[]  @relation("NotificationActor")
+  positionReplies      PositionReply[]
+  preference           UserPreference?
+  supportTickets       SupportTicket[]
+  activityMediaItems   ActivityMediaItem[]
 }
 
 model SocialAccount {
@@ -183,6 +191,7 @@ model Market {
   updatedAt             DateTime      @updatedAt
   positions             Position[]
   signals               TradeSignal[]
+  activityMediaItems    ActivityMediaItem[]
 
   @@unique([source, externalMarketId])
   @@index([source])
@@ -213,6 +222,7 @@ model Position {
   chainTransactionHash      String?
   idempotencyKey            String?
   status                    PositionStatus        @default(PENDING_EXECUTION)
+  visibility                String?               @default("PRIVATE")
   openedAt                  DateTime?
   closedAt                  DateTime?
   createdAt                 DateTime              @default(now())
@@ -223,6 +233,7 @@ model Position {
   resultingCopyTrade        CopyTrade?            @relation("CopyTradeResultingPosition")
   executionAttempts         ExecutionAttempt[]    @relation("PositionExecutionAttempts")
   contractTransactions      ContractTransaction[]
+  socialReplies             PositionReply[]
 
   @@index([userId])
   @@index([marketId])
@@ -308,6 +319,57 @@ model SignalBookmark {
   @@unique([signalId, userId])
   @@index([signalId])
   @@index([userId])
+}
+
+model UserFollow {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  followerId  String   @db.ObjectId
+  followingId String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  follower    User     @relation("UserFollowFollower", fields: [followerId], references: [id], onDelete: NoAction)
+  following   User     @relation("UserFollowFollowing", fields: [followingId], references: [id], onDelete: NoAction)
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+model UserNotification {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String    @db.ObjectId
+  actorUserId String?   @db.ObjectId
+  type        String
+  entityType  String?
+  entityId    String?
+  message     String
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  recipient   User      @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: NoAction)
+  actor       User?     @relation("NotificationActor", fields: [actorUserId], references: [id], onDelete: NoAction)
+
+  @@index([userId])
+  @@index([actorUserId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model PositionReply {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  positionId   String   @db.ObjectId
+  authorUserId String   @db.ObjectId
+  body         String
+  status       String   @default("PUBLISHED")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  position     Position @relation(fields: [positionId], references: [id], onDelete: NoAction)
+  author       User     @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
+
+  @@index([positionId])
+  @@index([authorUserId])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model CopyTrade {
@@ -396,6 +458,67 @@ model TradingRoom {
   signals     TradeSignal[]
 
   @@index([ownerId])
+}
+
+
+model UserPreference {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId             String   @unique @db.ObjectId
+  topics             String[]
+  regions            String[]
+  sports             String[]
+  mediaTypes         String[]
+  newsIntervalMinutes Int     @default(20)
+  notifyInActivity   Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  user               User     @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@index([updatedAt])
+}
+
+model ActivityMediaItem {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String?  @db.ObjectId
+  marketId        String?  @db.ObjectId
+  kind            String
+  title           String
+  summary         String
+  imageUrl        String?
+  videoUrl        String?
+  mediaBrief      Json?
+  source          String   @default("CONVICTION_AI")
+  status          String   @default("PUBLISHED")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User?    @relation(fields: [userId], references: [id], onDelete: NoAction)
+  market          Market?  @relation(fields: [marketId], references: [id], onDelete: NoAction)
+
+  @@index([userId])
+  @@index([marketId])
+  @@index([kind])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model SupportTicket {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String?  @db.ObjectId
+  wallet      String?
+  email       String
+  subject     String
+  summary     String
+  transcript  String?
+  status      String   @default("OPEN")
+  telegramSentAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User?    @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@index([userId])
+  @@index([email])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model ContractDeployment {

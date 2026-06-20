@@ -40,6 +40,7 @@ type CreatePositionBody = {
   leverageMultiplier?: string | null;
   marginCollateral?: string | null;
   idempotencyKey?: string | null;
+  visibility?: "PUBLIC" | "PRIVATE" | null;
 };
 
 type CreateCopyTradeBody = {
@@ -78,6 +79,7 @@ export async function registerPositionRoutes(app: FastifyInstance) {
             leverageMultiplier: { ...decimalStringSchema, nullable: true },
             marginCollateral: { ...decimalStringSchema, nullable: true },
             idempotencyKey: { type: "string", minLength: 1, maxLength: 128, nullable: true },
+            visibility: { type: "string", enum: ["PUBLIC", "PRIVATE"], nullable: true },
           },
         },
       },
