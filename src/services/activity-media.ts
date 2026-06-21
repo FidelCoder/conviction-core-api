@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import { prisma } from "../lib/prisma.js";
 import { getUserPreference } from "./preferences.js";
 
@@ -39,6 +41,8 @@ export async function listActivityMediaFeed(options: { userId?: string | null; l
 
   return items.map(normalizeActivityMediaItem);
 }
+
+type ActivityMediaItemWithMarket = Prisma.ActivityMediaItemGetPayload<{ include: { market: true } }>;
 
 export async function createActivityMediaItem(input: CreateActivityMediaInput) {
   const item = await prisma.activityMediaItem.create({
@@ -102,7 +106,7 @@ export async function generatePreferenceNewsFeed(userId: string, limit = 8) {
   return created;
 }
 
-function normalizeActivityMediaItem(item: any) {
+function normalizeActivityMediaItem(item: ActivityMediaItemWithMarket) {
   return {
     id: item.id,
     userId: item.userId ?? null,
@@ -121,7 +125,7 @@ function normalizeActivityMediaItem(item: any) {
   };
 }
 
-function scoreItem(item: any, terms: string[]) {
+function scoreItem(item: ActivityMediaItemWithMarket, terms: string[]) {
   if (terms.length === 0) return 0;
   const haystack = [item.title, item.summary, item.market?.title, item.market?.category, item.market?.providerMetadata]
     .filter(Boolean)
