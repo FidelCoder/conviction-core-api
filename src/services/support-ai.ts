@@ -13,14 +13,41 @@ type SupportAnswerInput = {
   maxLength?: number;
 };
 
+type SupportUnavailableReason = "missing_api_key" | "empty_response" | "provider_error" | "invalid_question";
+
+type SupportAnswerResult =
+  | {
+      ok: true;
+      answer: string;
+      source: "ai";
+      model: string;
+      baseUrl: string;
+    }
+  | {
+      ok: false;
+      answer: string;
+      source: "unavailable";
+      reason: SupportUnavailableReason;
+      detail?: string;
+      model: string;
+      baseUrl: string;
+    };
+
+type SupportAiProbeResult = {
+  configured: boolean;
+  ok: boolean;
+  baseUrl: string;
+  model: string;
+  detail: string;
+};
+
 const maxConversationMessages = 8;
 
-export async function createSupportAnswer(input: SupportAnswerInput) {
+export async function createSupportAnswer(input: SupportAnswerInput): Promise<SupportAnswerResult> {
   const question = normalizeSupportQuestion(truncateClean(input.question, 1200));
-  const fallback = createFallbackAnswer(question);
 
-  if (!question) return fallback;
-  if (!env.openAiApiKey) return fallback;
+  if (!question) return unavailable("invalid_question");
+  if (!env.openAiApiKey) return unavailable("missing_api_key");
 
   try {
     const answer = await requestOpenAiAnswer({
@@ -30,13 +57,78 @@ export async function createSupportAnswer(input: SupportAnswerInput) {
       maxLength: input.maxLength ?? 1400,
     });
 
-    return answer || fallback;
+    if (!answer) return unavailable("empty_response");
+
+    return {
+      ok: true,
+      answer,
+      source: "ai",
+      model: env.openAiSupportModel,
+      baseUrl: env.openAiBaseUrl,
+    };
   } catch (error) {
-    console.warn(
-      "Support AI provider request failed",
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return fallback;
+    const detail = error instanceof Error ? error.message : "unknown error";
+    console.warn("Support AI provider request failed", detail);
+    return unavailable("provider_error", detail);
+  }
+}
+
+export function getSupportAiRuntimeStatus() {
+  return {
+    configured: Boolean(env.openAiApiKey),
+    baseUrl: env.openAiBaseUrl,
+    model: env.openAiSupportModel,
+  };
+}
+
+export async function checkSupportAiProvider(): Promise<SupportAiProbeResult> {
+  const status = getSupportAiRuntimeStatus();
+
+  if (!env.openAiApiKey) {
+    return {
+      ...status,
+      ok: false,
+      detail: "missing_OPENAI_API_KEY_on_core_api",
+    };
+  }
+
+  try {
+    const response = await fetch(env.openAiBaseUrl.replace(/\/$/, "") + "/responses", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + env.openAiApiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: env.openAiSupportModel,
+        input: [
+          { role: "system", content: "Return exactly AI_READY." },
+          { role: "user", content: "ping" },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      return {
+        ...status,
+        ok: false,
+        detail: "provider_status_" + response.status,
+      };
+    }
+
+    const text = truncateClean(extractResponseText(await response.json()), 120);
+
+    return {
+      ...status,
+      ok: Boolean(text),
+      detail: text || "empty_response",
+    };
+  } catch (error) {
+    return {
+      ...status,
+      ok: false,
+      detail: error instanceof Error ? error.message : "provider_error",
+    };
   }
 }
 
@@ -67,7 +159,7 @@ async function requestOpenAiAnswer({
     }),
   });
 
-  if (!response.ok) throw new Error("Support AI request failed with status " + response.status + ".");
+  if (!response.ok) throw new Error("provider_status_" + response.status);
 
   const parsed = (await response.json()) as unknown;
   return truncateClean(extractResponseText(parsed), maxLength);
@@ -134,59 +226,29 @@ function extractTextContent(value: unknown) {
   return "";
 }
 
-function createFallbackAnswer(question: string) {
-  const normalized = question.toLowerCase();
+function unavailable(reason: SupportUnavailableReason, detail?: string): SupportAnswerResult {
+  const status = getSupportAiRuntimeStatus();
+  const reasonText = reason === "missing_api_key"
+    ? "OPENAI_API_KEY is missing on the core API deployment."
+    : reason === "empty_response"
+      ? "The AI provider returned an empty response."
+      : reason === "invalid_question"
+        ? "No AI question was provided."
+        : "The core API could not reach the AI provider" + (detail ? ": " + detail : ".");
 
-  if (mentionsContracts(normalized)) {
-    return contractSummary(normalized);
-  }
-
-  if (asksAboutProduct(normalized)) {
-    return "Conviction Markets is a leveraged prediction-market product. Traders discover event markets, review rules and odds, then use collateral plus vault liquidity to take larger YES/NO exposure. Liquidity providers supply capital to vaults and can earn from margin activity, while carrying contract, market, liquidation, and lockup risk. The social layer lets users discuss markets, share signals, follow traders, and route support through the app or Telegram.";
-  }
-
-  if (normalized.includes("risk") || normalized.includes("locked") || normalized.includes("lock")) {
-    return "Yes, vault liquidity has risk. Funds can be locked while backing active margin, and LPs carry smart-contract, market/liquidation, adapter/oracle, and rollout risk. The upside is earning from margin activity when the system is live and working correctly.";
-  }
-
-  if (normalized.includes("vault") || normalized.includes("liquidity") || normalized.includes("yield")) {
-    return "Vaults are the capital layer. Liquidity providers deposit capital, traders borrow from that pool for larger prediction-market exposure, and LPs can earn from that activity. It should be treated as risk capital, not guaranteed yield.";
-  }
-
-  if (normalized.includes("margin") || normalized.includes("leverage")) {
-    return "Margin means a trader uses their collateral plus vault liquidity to get larger exposure to a prediction market. The flow is: review rules, choose YES/NO, set collateral and leverage, then submit through the wallet flow when available.";
-  }
-
-  if (normalized.includes("prediction") || normalized.includes("market")) {
-    return "Conviction Markets is a leveraged marketplace for prediction markets. Users discover event markets, review rules and odds, discuss them in Market Pulse, and can request margin powered by vault liquidity.";
-  }
-
-  if (normalized.includes("wallet") || normalized.includes("connect")) {
-    return "Connect an EVM wallet from the top-right wallet button. Conviction keys profile, email, preferences, portfolio, and support context to that wallet address so the account persists across refreshes.";
-  }
-
-  if (normalized.includes("profile") || normalized.includes("viction")) {
-    return "Your Conviction identity is tied to your connected wallet. Claim a .viction handle, add email, avatar, and bio, then your public signals and social activity show under that profile.";
-  }
-
-  return "Conviction Markets helps traders find prediction markets, understand the rules, discuss them with other traders, and request leveraged exposure backed by vault liquidity. Ask me about a market, vault risk, margin flow, contracts, wallet setup, portfolio, or support.";
+  return {
+    ok: false,
+    answer: "Conviction AI is unavailable right now. " + reasonText + " The bot is not using local canned answers for /ai.",
+    source: "unavailable",
+    reason,
+    detail,
+    model: status.model,
+    baseUrl: status.baseUrl,
+  };
 }
 
-function contractSummary(filter = "") {
-  const normalized = filter.toLowerCase();
-  const matchingChains = supportedIntentChains.filter((chain) => {
-    if (!normalized) return true;
-    if (normalized.includes("base") && chain.chainName.toLowerCase().includes("base")) return true;
-    if (normalized.includes("ethereum") && chain.chainName.toLowerCase().includes("ethereum")) return true;
-    if (normalized.includes("eth") && chain.chainName.toLowerCase().includes("ethereum")) return true;
-    if (normalized.includes("arbitrum") && chain.chainName.toLowerCase().includes("arbitrum")) return true;
-    if (normalized.includes(String(chain.chainId))) return true;
-    return false;
-  });
-
-  const chains = matchingChains.length > 0 ? matchingChains : supportedIntentChains;
-
-  return chains.map((chain) => {
+function contractSummary() {
+  return supportedIntentChains.map((chain) => {
     const vault = chain.vaultAddress ?? "not deployed/configured yet";
     const collateral = chain.collateralTokenAddress
       ? `${chain.collateralTokenSymbol ?? "collateral"} ${chain.collateralTokenAddress}`
@@ -195,33 +257,6 @@ function contractSummary(filter = "") {
 
     return `${chain.chainName} (${chain.network}, chainId ${chain.chainId}): Conviction Vault ${vault}; collateral ${collateral}; ${walletFlow}.`;
   }).join("\n");
-}
-
-function mentionsContracts(normalized: string) {
-  return [
-    "contract",
-    "contracts",
-    "address",
-    "addresses",
-    "deployed",
-    "deployment",
-    "base",
-    "sepolia",
-    "arbitrum",
-    "ethereum",
-  ].some((term) => normalized.includes(term));
-}
-
-function asksAboutProduct(normalized: string) {
-  return [
-    "about the product",
-    "tell me about this product",
-    "tell me about the product",
-    "what is conviction",
-    "what's conviction",
-    "how does conviction",
-    "how exactly does it work",
-  ].some((term) => normalized.includes(term));
 }
 
 function normalizeConversation(value: ChatMessage[] | undefined): ChatMessage[] {

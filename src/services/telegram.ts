@@ -3,7 +3,7 @@ import { TelegramChatRole } from "@prisma/client";
 import { env } from "../config/index.js";
 import { prisma } from "../lib/prisma.js";
 import { listMarkets } from "./markets.js";
-import { createSupportAnswer } from "./support-ai.js";
+import { checkSupportAiProvider, createSupportAnswer, getSupportAiRuntimeStatus } from "./support-ai.js";
 import { createSupportReply, resolveSupportTicket } from "./support.js";
 
 type TelegramChat = {
@@ -139,6 +139,12 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
 
   if (command === "/markets") {
     await sendTelegramMessage(String(chat.id), await buildMarketDigest());
+    return { handled: true, command };
+  }
+
+  if (command === "/aistatus") {
+    const status = await checkSupportAiProvider();
+    await sendTelegramMessage(String(chat.id), aiStatusMessage(status));
     return { handled: true, command };
   }
 
@@ -319,12 +325,13 @@ async function handleSupportResolveCommand(args: string[], message: TelegramMess
 
 async function buildTelegramAiAnswer(question: string, message: TelegramMessage) {
   const author = message.from?.username ? "@" + message.from.username : message.from?.first_name ?? "Telegram user";
-
-  return createSupportAnswer({
+  const result = await createSupportAnswer({
     question,
     pageContext: "Telegram group question from " + author,
     maxLength: 1500,
   });
+
+  return result.answer;
 }
 
 function shouldAnswerCommunityMessage(role: TelegramChatRole, text: string) {
@@ -418,6 +425,7 @@ function helpMessage(role: TelegramChatRole) {
       "/reply <ticketId> Subject | Solution body - send a reply into the user support thread",
       "/resolve <ticketId> Subject | Closing note - mark a ticket resolved",
       "/markets - show a live market digest",
+      "/aistatus - test the core AI provider connection",
       "Support mail: " + supportEmail,
     ].join("\n");
   }
@@ -428,6 +436,7 @@ function helpMessage(role: TelegramChatRole) {
       "/ai <question> - ask Conviction AI",
       "/ai: <question> - ask Conviction AI",
       "/markets - show a live market digest",
+      "/aistatus - test the core AI provider connection",
       "/role general - stop scheduled market digests",
       "/status - show community bot status",
     ].join("\n");
@@ -438,8 +447,22 @@ function helpMessage(role: TelegramChatRole) {
     "/ai <question> - ask Conviction AI",
     "/ai: <question> - ask Conviction AI",
     "/markets - show a live market digest",
+    "/aistatus - test the core AI provider connection",
     "/role alerts - receive scheduled market digests",
     "/status - show community bot status",
+  ].join("\n");
+}
+
+function aiStatusMessage(status: Awaited<ReturnType<typeof checkSupportAiProvider>>) {
+  const runtime = getSupportAiRuntimeStatus();
+
+  return [
+    "Conviction AI status",
+    "Core OPENAI_API_KEY: " + (runtime.configured ? "configured" : "missing"),
+    "Base URL: " + runtime.baseUrl,
+    "Model: " + runtime.model,
+    "Provider test: " + (status.ok ? "ok" : "failed"),
+    "Detail: " + status.detail,
   ].join("\n");
 }
 
