@@ -139,6 +139,7 @@ model User {
   positionReplies      PositionReply[]
   preference           UserPreference?
   supportTickets       SupportTicket[]
+  supportReplies       SupportTicketReply[]
   activityMediaItems   ActivityMediaItem[]
 }
 
@@ -524,22 +525,47 @@ model TelegramChat {
 }
 
 model SupportTicket {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId      String?  @db.ObjectId
-  wallet      String?
-  email       String
-  subject     String
-  summary     String
-  transcript  String?
-  status      String   @default("OPEN")
+  id             String               @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String?              @db.ObjectId
+  wallet         String?
+  email          String
+  subject        String
+  summary        String
+  transcript     String?
+  status         String               @default("OPEN")
   telegramSentAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  user        User?    @relation(fields: [userId], references: [id], onDelete: NoAction)
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+  autoCloseAt    DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  user           User?                @relation(fields: [userId], references: [id], onDelete: NoAction)
+  replies        SupportTicketReply[]
 
   @@index([userId])
   @@index([email])
   @@index([status])
+  @@index([autoCloseAt])
+  @@index([createdAt])
+}
+
+model SupportTicketReply {
+  id          String        @id @default(auto()) @map("_id") @db.ObjectId
+  ticketId    String        @db.ObjectId
+  authorType  String
+  authorUserId String?      @db.ObjectId
+  authorName  String?
+  subject     String?
+  body        String
+  source      String        @default("APP")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author      User?         @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
+
+  @@index([ticketId])
+  @@index([authorUserId])
+  @@index([authorType])
   @@index([createdAt])
 }
 

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import { sendError, sendSuccess } from "../lib/responses.js";
-import { createSupportTicket, listSupportTickets } from "../services/support.js";
+import { createSupportReply, createSupportTicket, getSupportTicket, listSupportTickets } from "../services/support.js";
 
 type SupportBody = {
   userId?: string | null;
@@ -12,7 +12,14 @@ type SupportBody = {
   transcript?: string | null;
 };
 
-type SupportQuery = { limit?: number };
+type SupportReplyBody = {
+  userId?: string | null;
+  subject?: string | null;
+  body: string;
+};
+
+type SupportParams = { ticketId: string };
+type SupportQuery = { limit?: number; userId?: string; email?: string };
 
 export async function registerSupportRoutes(app: FastifyInstance) {
   app.post<{ Body: SupportBody }>("/support/tickets", async (request, reply) => {
@@ -41,8 +48,45 @@ export async function registerSupportRoutes(app: FastifyInstance) {
   });
 
   app.get<{ Querystring: SupportQuery }>("/support/tickets", async (request, reply) => {
-    const tickets = await listSupportTickets(request.query.limit);
+    const tickets = await listSupportTickets({
+      limit: request.query.limit,
+      userId: normalizeNullableField(request.query.userId),
+      email: normalizeNullableField(request.query.email),
+    });
     return sendSuccess(reply, { tickets });
+  });
+
+  app.get<{ Params: SupportParams }>("/support/tickets/:ticketId", async (request, reply) => {
+    const ticket = await getSupportTicket(request.params.ticketId);
+
+    if (!ticket) {
+      return sendError(reply, { code: "SUPPORT_TICKET_NOT_FOUND", message: "Support ticket was not found." }, 404);
+    }
+
+    return sendSuccess(reply, { ticket });
+  });
+
+  app.post<{ Params: SupportParams; Body: SupportReplyBody }>("/support/tickets/:ticketId/replies", async (request, reply) => {
+    const body = normalizeField(request.body.body);
+
+    if (!body) {
+      return sendError(reply, { code: "INVALID_SUPPORT_REPLY", message: "Reply body is required." }, 422);
+    }
+
+    try {
+      const result = await createSupportReply({
+        ticketId: request.params.ticketId,
+        authorType: "USER",
+        authorUserId: normalizeNullableField(request.body.userId),
+        subject: normalizeNullableField(request.body.subject),
+        body,
+        source: "APP",
+      });
+
+      return sendSuccess(reply, result, 201);
+    } catch {
+      return sendError(reply, { code: "SUPPORT_TICKET_NOT_FOUND", message: "Support ticket was not found." }, 404);
+    }
   });
 }
 
