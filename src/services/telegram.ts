@@ -3,6 +3,7 @@ import { TelegramChatRole } from "@prisma/client";
 import { env } from "../config/index.js";
 import { prisma } from "../lib/prisma.js";
 import { listMarkets } from "./markets.js";
+import { createSupportAnswer } from "./support-ai.js";
 
 type TelegramChat = {
   id: number;
@@ -10,8 +11,14 @@ type TelegramChat = {
   type?: string;
 };
 
+type TelegramUser = {
+  first_name?: string;
+  username?: string;
+};
+
 type TelegramMessage = {
   chat?: TelegramChat;
+  from?: TelegramUser;
   text?: string;
 };
 
@@ -46,6 +53,13 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   await rememberTelegramChat(chat);
 
   if (!text.startsWith("/")) {
+    const stored = await prisma.telegramChat.findUnique({ where: { chatId: String(chat.id) } });
+
+    if (shouldAnswerCommunityMessage(stored?.role ?? TelegramChatRole.GENERAL, text)) {
+      await sendTelegramMessage(String(chat.id), await buildTelegramAiAnswer(text, message));
+      return { handled: true, command: "ai_reply" };
+    }
+
     return { handled: true, command: "message" };
   }
 
@@ -59,6 +73,18 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
 
   if (command === "/help") {
     await sendTelegramMessage(String(chat.id), helpMessage());
+    return { handled: true, command };
+  }
+
+  if (command === "/ask") {
+    const question = args.join(" ").trim();
+
+    if (!question) {
+      await sendTelegramMessage(String(chat.id), "Ask like this: /ask What is vault liquidity risk?");
+      return { handled: true, command };
+    }
+
+    await sendTelegramMessage(String(chat.id), await buildTelegramAiAnswer(question, message));
     return { handled: true, command };
   }
 
@@ -182,6 +208,32 @@ async function setTelegramChatRole(chatId: string, role: TelegramChatRole, chat:
   });
 }
 
+async function buildTelegramAiAnswer(question: string, message: TelegramMessage) {
+  const author = message.from?.username ? "@" + message.from.username : message.from?.first_name ?? "Telegram user";
+
+  return createSupportAnswer({
+    question,
+    pageContext: "Telegram group question from " + author,
+    maxLength: 1500,
+  });
+}
+
+function shouldAnswerCommunityMessage(role: TelegramChatRole, text: string) {
+  if (role === TelegramChatRole.SUPPORT) return false;
+
+  const normalized = text.toLowerCase();
+  if (normalized.includes("@convictionmarkets_bot")) return true;
+  if (normalized.startsWith("conviction") || normalized.startsWith("bot")) return true;
+  if (normalized.includes("conviction markets") && normalized.includes("?")) return true;
+  if (normalized.includes("prediction market") && normalized.includes("?")) return true;
+  if (normalized.includes("vault") && normalized.includes("?")) return true;
+  if (normalized.includes("margin") && normalized.includes("?")) return true;
+  if (normalized.includes("leverage") && normalized.includes("?")) return true;
+  if (normalized.includes("risk") && normalized.includes("?")) return true;
+
+  return false;
+}
+
 async function buildMarketDigest() {
   const markets = await listMarkets({ limit: 5, status: "ACTIVE" });
 
@@ -241,6 +293,7 @@ function helpMessage() {
     "/role alerts - route market alerts here",
     "/role general - keep this as a general group",
     "/markets - show a live market digest",
+    "/ask <question> - ask Conviction AI in Telegram",
     "/status - show bot setup status",
   ].join("\n");
 }

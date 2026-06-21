@@ -15,6 +15,11 @@ Required frontend/server env:
 Required Telegram support env:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_SUPPORT_CHAT_ID`
+- `TELEGRAM_WEBHOOK_SECRET`
+- `CRON_SECRET`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_SUPPORT_MODEL`
 
 
 ## Telegram Notification Setup
@@ -57,6 +62,7 @@ Two-group role model:
 - Community group: use `/role general` for conversation, or `/role alerts` if the community should receive market digests.
 - Support group: use `/role support` so app support tickets route there.
 - The same bot can join both groups because roles are stored per Telegram `chat.id`.
+- A Telegram invite link does not reveal the `chat.id`. Add the bot to the group and send `/chatid` inside that group, or send any message and inspect `getUpdates` for `message.chat.id`.
 
 Group commands:
 - `/chatid` shows the current group id.
@@ -64,9 +70,34 @@ Group commands:
 - `/role alerts` registers the group for market digest alerts.
 - `/role general` keeps the group as a general bot group.
 - `/markets` posts a live digest from stored Conviction market data.
+- `/ask <question>` asks Conviction AI from Telegram.
+- Non-command community questions that mention Conviction, prediction markets, vaults, margin, leverage, or risk can receive AI answers.
 - `/status` shows the bot setup status for that chat.
 
 A bot will not reply in a group until the Telegram webhook is set. Privacy mode can stay disabled if the group should allow non-command monitoring later, but the current implementation only responds to commands.
+
+## Scheduled Telegram Market Updates
+
+Market digest posting is triggered by GitHub Actions so the project can keep using free infrastructure. The workflow is in `.github/workflows/telegram-market-digest.yml` and runs every 20 minutes.
+
+Required GitHub repository secrets for the core API repo:
+- `CORE_API_URL=https://conviction-core-api.vercel.app`
+- `CORE_CRON_SECRET=<same value as core Vercel CRON_SECRET>`
+
+Required core Vercel env:
+- `CRON_SECRET=<same secret used by GitHub Actions>`
+
+To enable a Telegram group to receive those updates, send this in that group:
+
+```text
+/role alerts
+```
+
+To keep a group conversational without scheduled market posts, send:
+
+```text
+/role general
+```
 
 ## User Preference Flow
 1. A connected wallet creates or resumes a core user session.

@@ -6,6 +6,7 @@ import { handleTelegramUpdate, sendMarketDigestToRole } from "../services/telegr
 
 type WebhookParams = { secret: string };
 type DigestBody = { token?: string };
+type DigestQuery = { token?: string };
 
 export async function registerTelegramRoutes(app: FastifyInstance) {
   app.post<{ Params: WebhookParams; Body: unknown }>("/telegram/webhook/:secret", async (request, reply) => {
@@ -18,11 +19,29 @@ export async function registerTelegramRoutes(app: FastifyInstance) {
   });
 
   app.post<{ Body: DigestBody }>("/telegram/market-digest", async (request, reply) => {
-    if (env.marketSyncToken && request.body?.token !== env.marketSyncToken) {
+    if (!isAuthorizedDigest(request.headers.authorization, request.body?.token)) {
       return sendError(reply, { code: "UNAUTHORIZED_MARKET_DIGEST", message: "Invalid digest token." }, 401);
     }
 
     const result = await sendMarketDigestToRole();
     return sendSuccess(reply, result);
   });
+
+  app.get<{ Querystring: DigestQuery }>("/telegram/market-digest", async (request, reply) => {
+    if (!isAuthorizedDigest(request.headers.authorization, request.query.token)) {
+      return sendError(reply, { code: "UNAUTHORIZED_MARKET_DIGEST", message: "Invalid digest token." }, 401);
+    }
+
+    const result = await sendMarketDigestToRole();
+    return sendSuccess(reply, result);
+  });
+}
+
+function isAuthorizedDigest(authorization: string | undefined, token: string | undefined) {
+  const bearer = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+
+  if (env.cronSecret && bearer === env.cronSecret) return true;
+  if (env.marketSyncToken && (token === env.marketSyncToken || bearer === env.marketSyncToken)) return true;
+
+  return env.environment !== "production" && !env.cronSecret && !env.marketSyncToken;
 }
