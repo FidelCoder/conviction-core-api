@@ -1,4 +1,5 @@
 import { env } from "../config/index.js";
+import { supportedIntentChains } from "../config/deployed-contracts.js";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -15,7 +16,7 @@ type SupportAnswerInput = {
 const maxConversationMessages = 8;
 
 export async function createSupportAnswer(input: SupportAnswerInput) {
-  const question = truncateClean(input.question, 1200);
+  const question = normalizeSupportQuestion(truncateClean(input.question, 1200));
   const fallback = createFallbackAnswer(question);
 
   if (!question) return fallback;
@@ -30,7 +31,11 @@ export async function createSupportAnswer(input: SupportAnswerInput) {
     });
 
     return answer || fallback;
-  } catch {
+  } catch (error) {
+    console.warn(
+      "Support AI provider request failed",
+      error instanceof Error ? error.message : "unknown error",
+    );
     return fallback;
   }
 }
@@ -46,20 +51,6 @@ async function requestOpenAiAnswer({
   pageContext: string;
   maxLength: number;
 }) {
-  const supportContext = [
-    "Conviction Markets is a leveraged marketplace for prediction markets.",
-    "Users browse real event markets, inspect rules and odds, create social signals, request margin, and manage portfolio/vault activity from Conviction routes.",
-    "The product adds a margin desk, vault-supplied liquidity, .viction identity, social Market Pulse, share cards, preferences, and support workflows around prediction market data.",
-    "Current execution posture: if the app says intent-only or testnet, explain that requests may be recorded/prepared but should not be described as fully executed unless transaction state confirms it.",
-    "Vault model: liquidity providers supply capital to vaults. Traders can use collateral plus vault liquidity for larger prediction market exposure. LP risks include smart-contract risk, market/liquidation risk, oracle/adapter risk, liquidity lockup during active use, and rollout risk.",
-    "Wallet model: EVM wallet sessions key profile, email, preferences, portfolio context, and support context. Users do not need Farcaster to use wallet profiles.",
-    "Profile model: users claim .viction handles, avatar, bio, and email against the connected wallet. Guests should connect wallet before editing profile.",
-    "Activity model: Market Pulse is the social/news layer. Users can post market calls, reply, like, repost, follow traders, and share market cards. Public/private trade visibility must be respected.",
-    "Market model: market pages show rules, category, region/topic, odds, and price history/candles when available. The product should feel like Conviction, not an outbound wrapper.",
-    "Telegram model: answer clearly inside Telegram. For account-specific issues, ask for email and issue summary so a human support ticket can be created. Do not mention WhatsApp.",
-    "Tone: concise, practical, and direct. Avoid hype and do not invent odds, winners, fills, PnL, liquidity, or execution state.",
-  ].join(" ");
-
   const response = await fetch(env.openAiBaseUrl.replace(/\/$/, "") + "/responses", {
     method: "POST",
     headers: {
@@ -69,17 +60,34 @@ async function requestOpenAiAnswer({
     body: JSON.stringify({
       model: env.openAiSupportModel,
       input: [
-        { role: "system", content: supportContext },
+        { role: "system", content: buildSupportContext() },
         ...conversation,
         { role: "user", content: JSON.stringify({ question, pageContext }) },
       ],
     }),
   });
 
-  if (!response.ok) throw new Error("Support AI request failed.");
+  if (!response.ok) throw new Error("Support AI request failed with status " + response.status + ".");
 
   const parsed = (await response.json()) as unknown;
   return truncateClean(extractResponseText(parsed), maxLength);
+}
+
+function buildSupportContext() {
+  return [
+    "You are Conviction AI, the Telegram and product support assistant for Conviction Markets.",
+    "Answer the user's exact question conversationally. Do not reply with a generic capability menu unless the user asks what you can do.",
+    "Conviction Markets is a leveraged marketplace for prediction markets. It uses real event market data and adds Conviction-native margin requests, vault liquidity, portfolio tracking, .viction identity, social Market Pulse, media/share cards, preferences, and support workflows.",
+    "Simple product explanation: traders can discover event markets, review rules and odds, and request larger YES/NO exposure using their collateral plus liquidity supplied by vault depositors. Liquidity providers deposit capital into vaults and can earn from margin activity, while accepting risk.",
+    "Current execution posture: if the app says intent-only, testnet, or pending adapter, explain that the flow may record or prepare a request but should not be called fully executed onchain unless the app has a confirmed transaction hash/state.",
+    "Vault risks: smart-contract risk, liquidation/market movement risk, oracle or adapter risk, liquidity lockup while funds back active margin, and rollout risk. Do not call yield guaranteed.",
+    "Wallet model: EVM wallet sessions key profile, email, preferences, portfolio context, support tickets, and .viction identity. Users do not need Farcaster to use wallet profiles.",
+    "Activity model: Market Pulse is the social/news layer for prediction markets. Users can post market calls, reply, like, repost, follow traders, and share market cards. Respect public/private trade visibility.",
+    "Market model: market pages show event rules, category, region/topic, odds, and price history/candles when available. The product should feel like Conviction, not an outbound wrapper.",
+    "Support model: for account-specific issues, ask for email and a short issue summary so a human ticket can be created. Support email is convictionsmarket@gmail.com. Do not mention WhatsApp.",
+    "Contract deployments known to the product:\n" + contractSummary(),
+    "Tone: clear, direct, practical, and human. Avoid hype. Do not invent odds, winners, fills, PnL, TVL, liquidity, transaction hashes, or execution state.",
+  ].join("\n\n");
 }
 
 function extractResponseText(value: unknown): string {
@@ -87,20 +95,55 @@ function extractResponseText(value: unknown): string {
   if (typeof value.output_text === "string") return value.output_text;
 
   const output = value.output;
-  if (!Array.isArray(output)) return "";
+  if (Array.isArray(output)) {
+    const parts: string[] = [];
 
-  for (const item of output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) continue;
-    for (const content of item.content) {
-      if (isRecord(content) && typeof content.text === "string") return content.text;
+    for (const item of output) {
+      if (!isRecord(item) || !Array.isArray(item.content)) continue;
+      for (const content of item.content) {
+        const text = extractTextContent(content);
+        if (text) parts.push(text);
+      }
+    }
+
+    if (parts.length > 0) return parts.join("\n").trim();
+  }
+
+  const choices = value.choices;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      if (!isRecord(choice) || !isRecord(choice.message)) continue;
+      const content = choice.message.content;
+      if (typeof content === "string") return content;
+      if (!Array.isArray(content)) continue;
+      const text = content.map(extractTextContent).filter(Boolean).join("\n").trim();
+      if (text) return text;
     }
   }
 
   return "";
 }
 
+function extractTextContent(value: unknown) {
+  if (typeof value === "string") return value;
+  if (!isRecord(value)) return "";
+  if (typeof value.text === "string") return value.text;
+  if (isRecord(value.text) && typeof value.text.value === "string") return value.text.value;
+  if (typeof value.output_text === "string") return value.output_text;
+  if (typeof value.content === "string") return value.content;
+  return "";
+}
+
 function createFallbackAnswer(question: string) {
   const normalized = question.toLowerCase();
+
+  if (mentionsContracts(normalized)) {
+    return contractSummary(normalized);
+  }
+
+  if (asksAboutProduct(normalized)) {
+    return "Conviction Markets is a leveraged prediction-market product. Traders discover event markets, review rules and odds, then use collateral plus vault liquidity to take larger YES/NO exposure. Liquidity providers supply capital to vaults and can earn from margin activity, while carrying contract, market, liquidation, and lockup risk. The social layer lets users discuss markets, share signals, follow traders, and route support through the app or Telegram.";
+  }
 
   if (normalized.includes("risk") || normalized.includes("locked") || normalized.includes("lock")) {
     return "Yes, vault liquidity has risk. Funds can be locked while backing active margin, and LPs carry smart-contract, market/liquidation, adapter/oracle, and rollout risk. The upside is earning from margin activity when the system is live and working correctly.";
@@ -126,7 +169,59 @@ function createFallbackAnswer(question: string) {
     return "Your Conviction identity is tied to your connected wallet. Claim a .viction handle, add email, avatar, and bio, then your public signals and social activity show under that profile.";
   }
 
-  return "I can help with market discovery, rules, margin requests, vault deposits, wallet connection, .viction profiles, portfolio, Activity, or support. For account-specific help, share an email and short issue summary so the team can follow up.";
+  return "Conviction Markets helps traders find prediction markets, understand the rules, discuss them with other traders, and request leveraged exposure backed by vault liquidity. Ask me about a market, vault risk, margin flow, contracts, wallet setup, portfolio, or support.";
+}
+
+function contractSummary(filter = "") {
+  const normalized = filter.toLowerCase();
+  const matchingChains = supportedIntentChains.filter((chain) => {
+    if (!normalized) return true;
+    if (normalized.includes("base") && chain.chainName.toLowerCase().includes("base")) return true;
+    if (normalized.includes("ethereum") && chain.chainName.toLowerCase().includes("ethereum")) return true;
+    if (normalized.includes("eth") && chain.chainName.toLowerCase().includes("ethereum")) return true;
+    if (normalized.includes("arbitrum") && chain.chainName.toLowerCase().includes("arbitrum")) return true;
+    if (normalized.includes(String(chain.chainId))) return true;
+    return false;
+  });
+
+  const chains = matchingChains.length > 0 ? matchingChains : supportedIntentChains;
+
+  return chains.map((chain) => {
+    const vault = chain.vaultAddress ?? "not deployed/configured yet";
+    const collateral = chain.collateralTokenAddress
+      ? `${chain.collateralTokenSymbol ?? "collateral"} ${chain.collateralTokenAddress}`
+      : "not deployed/configured yet";
+    const walletFlow = chain.walletFlowEnabled ? "wallet flow enabled" : "wallet flow not enabled";
+
+    return `${chain.chainName} (${chain.network}, chainId ${chain.chainId}): Conviction Vault ${vault}; collateral ${collateral}; ${walletFlow}.`;
+  }).join("\n");
+}
+
+function mentionsContracts(normalized: string) {
+  return [
+    "contract",
+    "contracts",
+    "address",
+    "addresses",
+    "deployed",
+    "deployment",
+    "base",
+    "sepolia",
+    "arbitrum",
+    "ethereum",
+  ].some((term) => normalized.includes(term));
+}
+
+function asksAboutProduct(normalized: string) {
+  return [
+    "about the product",
+    "tell me about this product",
+    "tell me about the product",
+    "what is conviction",
+    "what's conviction",
+    "how does conviction",
+    "how exactly does it work",
+  ].some((term) => normalized.includes(term));
 }
 
 function normalizeConversation(value: ChatMessage[] | undefined): ChatMessage[] {
@@ -139,6 +234,14 @@ function normalizeConversation(value: ChatMessage[] | undefined): ChatMessage[] 
     }))
     .filter((message) => message.content.length > 0)
     .slice(-maxConversationMessages);
+}
+
+function normalizeSupportQuestion(value: string) {
+  return value
+    .replace(/^<+/, "")
+    .replace(/>+$/, "")
+    .replace(/^question>\s*/i, "")
+    .trim();
 }
 
 function truncateClean(value: string, maxLength: number) {

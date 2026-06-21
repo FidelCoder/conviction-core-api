@@ -74,11 +74,13 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     return { handled: true, command: "message" };
   }
 
-  const [rawCommand, ...rawArgs] = text.split(/\s+/);
+  const normalizedText = normalizeTelegramCommandText(text);
+  const [rawCommand, ...rawArgs] = normalizedText.split(/\s+/);
   const commandToken = rawCommand.split("@")[0].toLowerCase();
   const aiColonQuestion = commandToken.startsWith("/ai:") ? commandToken.slice("/ai:".length).trim() : "";
-  const command = commandToken.startsWith("/ai:") ? "/ai" : commandToken;
-  const args = aiColonQuestion ? [aiColonQuestion, ...rawArgs] : rawArgs;
+  const askColonQuestion = commandToken.startsWith("/ask:") ? commandToken.slice("/ask:".length).trim() : "";
+  const command = commandToken.startsWith("/ai:") ? "/ai" : commandToken.startsWith("/ask:") ? "/ask" : commandToken;
+  const args = aiColonQuestion || askColonQuestion ? [aiColonQuestion || askColonQuestion, ...rawArgs] : rawArgs;
 
   if (command === "/start") {
     await sendTelegramMessage(String(chat.id), startMessage(chat.id));
@@ -92,7 +94,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   }
 
   if (command === "/ai" || command === "/ask") {
-    const question = args.join(" ").trim();
+    const question = normalizeAiQuestion(args.join(" "));
 
     if (!question) {
       await sendTelegramMessage(String(chat.id), "Ask like this: /ask What is vault liquidity risk?");
@@ -380,6 +382,22 @@ async function sendTelegramMessage(chatId: string, text: string) {
   } catch {
     return false;
   }
+}
+
+function normalizeTelegramCommandText(value: string) {
+  return value
+    .replace(/^\/ai\s*<question>\s*/i, "/ai ")
+    .replace(/^\/ai:\s*/i, "/ai ")
+    .replace(/^\/ask:\s*/i, "/ask ");
+}
+
+function normalizeAiQuestion(value: string) {
+  return value
+    .trim()
+    .replace(/^<+/, "")
+    .replace(/>+$/, "")
+    .replace(/^question>\s*/i, "")
+    .trim();
 }
 
 function startMessage(chatId: number) {
