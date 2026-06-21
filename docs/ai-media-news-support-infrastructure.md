@@ -11,13 +11,11 @@ Required frontend/server env:
 - `OPENAI_BASE_URL=https://share-ai.ckbdev.com`
 - `OPENAI_MEDIA_MODEL=gpt-5.5`
 - `OPENAI_SUPPORT_MODEL=gpt-5.5`
-- `AI_KEY_ROTATION_INTERVAL_DAYS=30`
 
 Required Telegram support env:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_SUPPORT_CHAT_ID`
 
-Operational rule: rotate OpenAI and Telegram credentials every 30 days or immediately after accidental exposure.
 
 ## Telegram Notification Setup
 Use Telegram only for human support escalation.
