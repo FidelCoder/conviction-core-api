@@ -32,6 +32,33 @@ Use Telegram only for human support escalation.
 
 If `getUpdates` returns an empty result, send `/start@your_bot_username` in the group, or ask BotFather to disable privacy for the bot with `/setprivacy`, then send another group message and reload the URL.
 
+
+## Telegram Bot Runtime
+Current support group chat id from `getUpdates`:
+- `TELEGRAM_SUPPORT_CHAT_ID=-4910208424`
+
+Required core production env:
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_SUPPORT_CHAT_ID`
+- `TELEGRAM_WEBHOOK_SECRET`
+- `CORE_PUBLIC_URL=https://conviction-core-api.vercel.app`
+
+After deploying core, point Telegram at the webhook:
+
+```text
+https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://conviction-core-api.vercel.app/telegram/webhook/<TELEGRAM_WEBHOOK_SECRET>
+```
+
+Group commands:
+- `/chatid` shows the current group id.
+- `/role support` registers the group for support tickets.
+- `/role alerts` registers the group for market digest alerts.
+- `/role general` keeps the group as a general bot group.
+- `/markets` posts a live digest from stored Conviction market data.
+- `/status` shows the bot setup status for that chat.
+
+A bot will not reply in a group until the Telegram webhook is set. Privacy mode can stay disabled if the group should allow non-command monitoring later, but the current implementation only responds to commands.
+
 ## User Preference Flow
 1. A connected wallet creates or resumes a core user session.
 2. The user chooses topics, regions, preferred sports/markets, preferred media type, and news cadence.

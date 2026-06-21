@@ -103,6 +103,12 @@ enum ContractTransactionStatus {
   CANCELLED
 }
 
+enum TelegramChatRole {
+  SUPPORT
+  MARKET_ALERTS
+  GENERAL
+}
+
 enum ContractTransactionType {
   COLLATERAL_APPROVAL
   DEPOSIT
@@ -499,6 +505,22 @@ model ActivityMediaItem {
   @@index([kind])
   @@index([status])
   @@index([createdAt])
+}
+
+model TelegramChat {
+  id          String           @id @default(auto()) @map("_id") @db.ObjectId
+  chatId      String           @unique
+  title       String?
+  type        String?
+  role        TelegramChatRole @default(GENERAL)
+  isActive    Boolean          @default(true)
+  lastSeenAt  DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([role])
+  @@index([isActive])
+  @@index([lastSeenAt])
 }
 
 model SupportTicket {

@@ -1,5 +1,5 @@
-import { env } from "../config/index.js";
 import { prisma } from "../lib/prisma.js";
+import { sendSupportTicketAlert } from "./telegram.js";
 
 export type CreateSupportTicketInput = {
   userId?: string | null;
@@ -42,27 +42,5 @@ export async function listSupportTickets(limit = 50) {
 }
 
 async function sendTelegramSupportAlert(ticket: { id: string; email: string; subject: string; summary: string; wallet: string | null; userId: string | null }) {
-  if (!env.telegramBotToken || !env.telegramSupportChatId) return false;
-
-  const text = [
-    "New Conviction support ticket",
-    "Ticket: " + ticket.id,
-    "Email: " + ticket.email,
-    ticket.wallet ? "Wallet: " + ticket.wallet : null,
-    ticket.userId ? "User: " + ticket.userId : null,
-    "Subject: " + ticket.subject,
-    "Summary: " + ticket.summary,
-  ].filter(Boolean).join("\n");
-
-  try {
-    const response = await fetch("https://api.telegram.org/bot" + env.telegramBotToken + "/sendMessage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: env.telegramSupportChatId, text }),
-    });
-
-    return response.ok;
-  } catch {
-    return false;
-  }
+  return sendSupportTicketAlert(ticket);
 }

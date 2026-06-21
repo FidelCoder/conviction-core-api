@@ -23,6 +23,8 @@ const envSchema = z.object({
   CONVICTION_EXECUTION_ADAPTER_ADDRESS: optionalEvmAddress,
   TELEGRAM_BOT_TOKEN: z.string().min(8).optional(),
   TELEGRAM_SUPPORT_CHAT_ID: z.string().min(1).optional(),
+  TELEGRAM_WEBHOOK_SECRET: z.string().min(16).optional(),
+  CORE_PUBLIC_URL: z.string().url().optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -46,4 +48,6 @@ export const env = {
   convictionExecutionAdapterAddress: parsedEnv.data.CONVICTION_EXECUTION_ADAPTER_ADDRESS ?? null,
   telegramBotToken: parsedEnv.data.TELEGRAM_BOT_TOKEN ?? null,
   telegramSupportChatId: parsedEnv.data.TELEGRAM_SUPPORT_CHAT_ID ?? null,
+  telegramWebhookSecret: parsedEnv.data.TELEGRAM_WEBHOOK_SECRET ?? null,
+  corePublicUrl: parsedEnv.data.CORE_PUBLIC_URL ?? null,
 };

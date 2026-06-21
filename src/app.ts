@@ -14,6 +14,7 @@ import { registerSignalRoutes } from "./routes/signals.js";
 import { registerSocialRoutes } from "./routes/social.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { registerSupportRoutes } from "./routes/support.js";
+import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUserRoutes } from "./routes/users.js";
 import { ensureDefaultContractDeployments } from "./services/contracts.js";
 
@@ -37,6 +38,7 @@ export async function buildApp() {
   await registerSocialRoutes(app);
   await registerActivityMediaRoutes(app);
   await registerSupportRoutes(app);
+  await registerTelegramRoutes(app);
   await registerPositionRoutes(app);
   await registerStatsRoutes(app);
 
