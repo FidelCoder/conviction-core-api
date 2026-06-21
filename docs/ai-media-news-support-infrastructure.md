@@ -49,6 +49,15 @@ After deploying core, point Telegram at the webhook:
 https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=https://conviction-core-api.vercel.app/telegram/webhook/<TELEGRAM_WEBHOOK_SECRET>
 ```
 
+
+Official community group:
+- `https://t.me/+KYjXR2Tz2P4xMGY0`
+
+Two-group role model:
+- Community group: use `/role general` for conversation, or `/role alerts` if the community should receive market digests.
+- Support group: use `/role support` so app support tickets route there.
+- The same bot can join both groups because roles are stored per Telegram `chat.id`.
+
 Group commands:
 - `/chatid` shows the current group id.
 - `/role support` registers the group for support tickets.
