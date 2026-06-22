@@ -3,9 +3,13 @@ import type { FastifyInstance } from "fastify";
 import { AppError } from "../lib/errors.js";
 import { sendSuccess } from "../lib/responses.js";
 import {
+  addPulsePostBookmark,
+  addPulsePostReaction,
   addSignalBookmark,
   addSignalReaction,
   createPositionReply,
+  createPulsePost,
+  createPulsePostReply,
   createSignalReply,
   followUser,
   getSocialFeedItem,
@@ -16,6 +20,8 @@ import {
   listUserFollowers,
   listUserFollowing,
   listUserNotifications,
+  removePulsePostBookmark,
+  removePulsePostReaction,
   removeSignalBookmark,
   removeSignalReaction,
   unfollowUser,
@@ -46,7 +52,15 @@ type SignalParams = {
   signalId: string;
 };
 
+type PostParams = {
+  postId: string;
+};
+
 type SignalUserParams = SignalParams & {
+  userId: string;
+};
+
+type PostUserParams = PostParams & {
   userId: string;
 };
 
@@ -57,6 +71,13 @@ type ReplyQuery = {
 type CreateReplyBody = {
   authorUserId: string;
   body: string;
+};
+
+type CreatePulsePostBody = {
+  authorUserId: string;
+  body: string;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
 };
 
 type FollowBody = {
@@ -88,6 +109,129 @@ export async function registerSocialRoutes(app: FastifyInstance) {
       const events = await listSocialTimeline(request.query);
 
       return sendSuccess(reply, { events });
+    },
+  );
+
+
+  app.post<{ Body: CreatePulsePostBody }>(
+    "/social/posts",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["authorUserId", "body"],
+          additionalProperties: false,
+          properties: {
+            authorUserId: { type: "string", minLength: 1 },
+            body: { type: "string", minLength: 1, maxLength: 1000 },
+            mediaUrl: { type: "string", nullable: true, maxLength: 2048 },
+            mediaType: { type: "string", nullable: true, maxLength: 32 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const post = await createPulsePost(request.body);
+
+      return sendSuccess(reply, { post }, 201);
+    },
+  );
+
+
+  app.post<{ Params: PostParams; Body: CreateReplyBody }>(
+    "/social/posts/:postId/replies",
+    {
+      schema: {
+        params: postParamsSchema,
+        body: {
+          type: "object",
+          required: ["authorUserId", "body"],
+          additionalProperties: false,
+          properties: {
+            authorUserId: { type: "string", minLength: 1 },
+            body: { type: "string", minLength: 1, maxLength: 1000 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const replyRecord = await createPulsePostReply({
+        postId: request.params.postId,
+        authorUserId: request.body.authorUserId,
+        body: request.body.body,
+      });
+
+      return sendSuccess(reply, { reply: replyRecord }, 201);
+    },
+  );
+
+  app.post<{ Params: PostParams; Body: UserActionBody }>(
+    "/social/posts/:postId/reactions",
+    {
+      schema: {
+        params: postParamsSchema,
+        body: userActionBodySchema,
+      },
+    },
+    async (request, reply) => {
+      const result = await addPulsePostReaction({
+        postId: request.params.postId,
+        userId: request.body.userId,
+      });
+
+      return sendSuccess(reply, result, 201);
+    },
+  );
+
+  app.delete<{ Params: PostUserParams }>(
+    "/social/posts/:postId/reactions/:userId",
+    {
+      schema: {
+        params: postUserParamsSchema,
+      },
+    },
+    async (request, reply) => {
+      const result = await removePulsePostReaction({
+        postId: request.params.postId,
+        userId: request.params.userId,
+      });
+
+      return sendSuccess(reply, result);
+    },
+  );
+
+  app.post<{ Params: PostParams; Body: UserActionBody }>(
+    "/social/posts/:postId/bookmarks",
+    {
+      schema: {
+        params: postParamsSchema,
+        body: userActionBodySchema,
+      },
+    },
+    async (request, reply) => {
+      const result = await addPulsePostBookmark({
+        postId: request.params.postId,
+        userId: request.body.userId,
+      });
+
+      return sendSuccess(reply, result, 201);
+    },
+  );
+
+  app.delete<{ Params: PostUserParams }>(
+    "/social/posts/:postId/bookmarks/:userId",
+    {
+      schema: {
+        params: postUserParamsSchema,
+      },
+    },
+    async (request, reply) => {
+      const result = await removePulsePostBookmark({
+        postId: request.params.postId,
+        userId: request.params.userId,
+      });
+
+      return sendSuccess(reply, result);
     },
   );
 
@@ -428,11 +572,28 @@ const signalParamsSchema = {
   },
 };
 
+const postParamsSchema = {
+  type: "object",
+  required: ["postId"],
+  properties: {
+    postId: { type: "string", minLength: 1 },
+  },
+};
+
 const signalUserParamsSchema = {
   type: "object",
   required: ["signalId", "userId"],
   properties: {
     signalId: { type: "string", minLength: 1 },
+    userId: { type: "string", minLength: 1 },
+  },
+};
+
+const postUserParamsSchema = {
+  type: "object",
+  required: ["postId", "userId"],
+  properties: {
+    postId: { type: "string", minLength: 1 },
     userId: { type: "string", minLength: 1 },
   },
 };

@@ -82,6 +82,15 @@ enum SignalReactionType {
   LIKE
 }
 
+enum PulsePostStatus {
+  PUBLISHED
+  HIDDEN
+}
+
+enum PulsePostReactionType {
+  LIKE
+}
+
 enum CopyTradeStatus {
   PENDING_EXECUTION
   EXECUTED
@@ -132,6 +141,10 @@ model User {
   signalReplies        SignalReply[]
   signalReactions      SignalReaction[]
   signalBookmarks      SignalBookmark[]
+  pulsePosts           PulsePost[]
+  pulsePostReplies     PulsePostReply[]
+  pulsePostReactions   PulsePostReaction[]
+  pulsePostBookmarks   PulsePostBookmark[]
   followingUsers       UserFollow[]          @relation("UserFollowFollower")
   followerUsers        UserFollow[]          @relation("UserFollowFollowing")
   notifications        UserNotification[]    @relation("NotificationRecipient")
@@ -325,6 +338,72 @@ model SignalBookmark {
 
   @@unique([signalId, userId])
   @@index([signalId])
+  @@index([userId])
+}
+
+model PulsePost {
+  id           String          @id @default(auto()) @map("_id") @db.ObjectId
+  authorUserId String          @db.ObjectId
+  body         String
+  mediaUrl     String?
+  mediaType    String?
+  status       PulsePostStatus @default(PUBLISHED)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  author       User            @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
+  replies      PulsePostReply[]
+  reactions    PulsePostReaction[]
+  bookmarks    PulsePostBookmark[]
+
+  @@index([authorUserId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PulsePostReply {
+  id           String          @id @default(auto()) @map("_id") @db.ObjectId
+  postId       String          @db.ObjectId
+  authorUserId String          @db.ObjectId
+  body         String
+  status       PulsePostStatus @default(PUBLISHED)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  post         PulsePost       @relation(fields: [postId], references: [id], onDelete: NoAction)
+  author       User            @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
+
+  @@index([postId])
+  @@index([authorUserId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PulsePostReaction {
+  id        String                @id @default(auto()) @map("_id") @db.ObjectId
+  postId    String                @db.ObjectId
+  userId    String                @db.ObjectId
+  type      PulsePostReactionType @default(LIKE)
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+  post      PulsePost             @relation(fields: [postId], references: [id], onDelete: NoAction)
+  user      User                  @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@unique([postId, userId, type])
+  @@index([postId])
+  @@index([userId])
+  @@index([type])
+}
+
+model PulsePostBookmark {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  postId    String    @db.ObjectId
+  userId    String    @db.ObjectId
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  post      PulsePost @relation(fields: [postId], references: [id], onDelete: NoAction)
+  user      User      @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@unique([postId, userId])
+  @@index([postId])
   @@index([userId])
 }
 

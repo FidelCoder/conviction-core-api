@@ -1,5 +1,9 @@
 import type {
   Market,
+  PulsePost,
+  PulsePostBookmark,
+  PulsePostReaction,
+  PulsePostReply,
   Position,
   PositionReply,
   SignalBookmark,
@@ -11,7 +15,7 @@ import type {
   UserFollow,
   UserNotification,
 } from "@prisma/client";
-import { Prisma, SignalReactionType, SignalReplyStatus } from "@prisma/client";
+import { Prisma, PulsePostReactionType, SignalReactionType, SignalReplyStatus } from "@prisma/client";
 
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
@@ -32,8 +36,31 @@ export type CreateSignalReplyInput = {
   body: string;
 };
 
+export type CreatePulsePostInput = {
+  authorUserId: string;
+  body: string;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+};
+
 export type SignalReactionInput = {
   signalId: string;
+  userId: string;
+};
+
+export type CreatePulsePostReplyInput = {
+  postId: string;
+  authorUserId: string;
+  body: string;
+};
+
+export type PulsePostReactionInput = {
+  postId: string;
+  userId: string;
+};
+
+export type PulsePostBookmarkInput = {
+  postId: string;
   userId: string;
 };
 
@@ -63,6 +90,8 @@ export type NormalizedSocialActor = {
   userId: string;
   displayName: string | null;
   handle: string | null;
+  traderProfileId: string | null;
+  avatarUrl: string | null;
   platform: SocialAccount["platform"] | null;
   platformUserId: string | null;
   username: string | null;
@@ -143,6 +172,32 @@ export type NormalizedPositionReply = {
   updatedAt: string;
 };
 
+export type NormalizedPulsePostReply = {
+  id: string;
+  postId: string;
+  authorUserId: string;
+  body: string;
+  status: PulsePostReply["status"];
+  author: NormalizedSocialActor;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type NormalizedPulsePost = {
+  id: string;
+  authorUserId: string;
+  body: string;
+  mediaUrl: string | null;
+  mediaType: string | null;
+  status: PulsePost["status"];
+  author: NormalizedSocialActor;
+  counts: SocialFeedCounts;
+  viewer: SocialViewerState | null;
+  recentReplies: NormalizedPulsePostReply[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type NormalizedPublicPosition = {
   id: string;
   userId: string;
@@ -164,10 +219,11 @@ export type NormalizedPublicPosition = {
 
 export type NormalizedSocialTimelineEvent = {
   id: string;
-  type: "SIGNAL" | "REPOST" | "PUBLIC_TRADE" | "FOLLOW";
+  type: "SIGNAL" | "REPOST" | "PUBLIC_TRADE" | "FOLLOW" | "POST";
   createdAt: string;
   actor: NormalizedSocialActor;
   signal?: NormalizedSocialFeedItem;
+  post?: NormalizedPulsePost;
   position?: NormalizedPublicPosition;
   follow?: NormalizedUserFollow;
 };
@@ -254,6 +310,51 @@ const publicPositionInclude = {
     },
   },
 } satisfies Prisma.PositionInclude;
+
+const pulsePostInclude = {
+  author: {
+    include: {
+      socialAccounts: true,
+      traderProfile: true,
+    },
+  },
+  replies: {
+    where: { status: "PUBLISHED" },
+    orderBy: { createdAt: "desc" },
+    take: 4,
+    include: {
+      author: {
+        include: {
+          socialAccounts: true,
+          traderProfile: true,
+        },
+      },
+    },
+  },
+  _count: {
+    select: {
+      replies: { where: { status: "PUBLISHED" } },
+      reactions: true,
+      bookmarks: true,
+    },
+  },
+} satisfies Prisma.PulsePostInclude;
+
+type PulsePostWithRelations = Prisma.PulsePostGetPayload<{ include: typeof pulsePostInclude }>;
+
+type PulsePostReplyWithAuthor = PulsePostReply & {
+  author: User & { socialAccounts: SocialAccount[]; traderProfile: TraderProfile | null };
+};
+
+type PulsePostReactionWithUser = PulsePostReaction & {
+  user: User & { socialAccounts: SocialAccount[]; traderProfile: TraderProfile | null };
+  post: PulsePost;
+};
+
+type PulsePostBookmarkWithUser = PulsePostBookmark & {
+  user: User & { socialAccounts: SocialAccount[]; traderProfile: TraderProfile | null };
+  post: PulsePost;
+};
 
 type ReplyWithAuthor = SignalReply & {
   author: User & {
@@ -404,13 +505,22 @@ export async function listSocialTimeline(options: SocialTimelineOptions = {}) {
   }
 
   const actorFilter = followingIds ? { in: followingIds } : undefined;
-  const [signals, reposts, positions, follows] = await Promise.all([
+  const [signals, posts, reposts, positions] = await Promise.all([
     prisma.tradeSignal.findMany({
       where: {
         status: "PUBLISHED",
         traderProfile: actorFilter ? { userId: actorFilter } : undefined,
       },
       include: feedInclude,
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    }),
+    prisma.pulsePost.findMany({
+      where: {
+        status: "PUBLISHED",
+        authorUserId: actorFilter,
+      },
+      include: pulsePostInclude,
       orderBy: { createdAt: "desc" },
       take: limit,
     }),
@@ -432,12 +542,6 @@ export async function listSocialTimeline(options: SocialTimelineOptions = {}) {
       orderBy: { createdAt: "desc" },
       take: limit,
     }),
-    prisma.userFollow.findMany({
-      where: actorFilter ? { followerId: actorFilter } : undefined,
-      include: followInclude,
-      orderBy: { createdAt: "desc" },
-      take: limit,
-    }),
   ]);
 
   const viewerState = options.userId
@@ -446,8 +550,18 @@ export async function listSocialTimeline(options: SocialTimelineOptions = {}) {
         ...reposts.map((repost) => repost.signal.id),
       ])
     : null;
+  const postViewerState = options.userId
+    ? await getPulsePostViewerState(options.userId, posts.map((post) => post.id))
+    : null;
 
   const events: NormalizedSocialTimelineEvent[] = [
+    ...posts.map((post) => ({
+      id: "post-" + post.id,
+      type: "POST" as const,
+      createdAt: post.createdAt.toISOString(),
+      actor: normalizeSocialActor((post as PulsePostWithRelations).author),
+      post: normalizePulsePost(post as PulsePostWithRelations, postViewerState?.get(post.id) ?? null),
+    })),
     ...signals.map((signal) => ({
       id: "signal-" + signal.id,
       type: "SIGNAL" as const,
@@ -469,18 +583,251 @@ export async function listSocialTimeline(options: SocialTimelineOptions = {}) {
       actor: normalizeSocialActor((position as PublicPositionWithRelations).user),
       position: normalizePublicPosition(position as PublicPositionWithRelations),
     })),
-    ...follows.map((follow) => ({
-      id: "follow-" + follow.id,
-      type: "FOLLOW" as const,
-      createdAt: follow.createdAt.toISOString(),
-      actor: normalizeSocialActor((follow as FollowWithUsers).follower),
-      follow: normalizeUserFollow(follow as FollowWithUsers),
-    })),
   ];
 
   return events
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
     .slice(0, limit);
+}
+
+
+export async function createPulsePost(input: CreatePulsePostInput) {
+  const body = input.body.trim();
+
+  if (body.length < 1 || body.length > 1000) {
+    throw new AppError("Pulse post must be 1 to 1000 characters", {
+      code: "INVALID_PULSE_POST",
+      statusCode: 422,
+    });
+  }
+
+  await ensureUserExists(input.authorUserId);
+
+  const post = await prisma.pulsePost.create({
+    data: {
+      authorUserId: input.authorUserId,
+      body,
+      mediaUrl: input.mediaUrl?.trim() || null,
+      mediaType: input.mediaType?.trim() || null,
+    },
+    include: pulsePostInclude,
+  });
+
+  await notifyFollowers({
+    actorUserId: input.authorUserId,
+    type: "FOLLOWING_PULSE_POST",
+    entityType: "PULSE_POST",
+    entityId: post.id,
+    message: getActorDisplayName((post as PulsePostWithRelations).author) + " posted on Pulse.",
+  });
+
+  return normalizePulsePost(post as PulsePostWithRelations, null);
+}
+
+export async function createPulsePostReply(input: CreatePulsePostReplyInput) {
+  const body = input.body.trim();
+
+  if (body.length < 1 || body.length > 1000) {
+    throw new AppError("Reply must be 1 to 1000 characters", {
+      code: "INVALID_PULSE_POST_REPLY",
+      statusCode: 422,
+    });
+  }
+
+  const [post, author] = await Promise.all([
+    getPublishedPulsePost(input.postId),
+    prisma.user.findUnique({
+      where: { id: input.authorUserId },
+      include: { socialAccounts: true, traderProfile: true },
+    }),
+  ]);
+
+  if (!author) {
+    throw new AppError("User not found", {
+      code: "USER_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  const reply = await prisma.pulsePostReply.create({
+    data: {
+      postId: input.postId,
+      authorUserId: input.authorUserId,
+      body,
+    },
+    include: {
+      author: {
+        include: {
+          socialAccounts: true,
+          traderProfile: true,
+        },
+      },
+    },
+  });
+
+  if (post.authorUserId !== input.authorUserId) {
+    await createNotification({
+      userId: post.authorUserId,
+      actorUserId: input.authorUserId,
+      type: "PULSE_POST_REPLY",
+      entityType: "PULSE_POST",
+      entityId: input.postId,
+      message: getActorDisplayName(author) + " replied to your Pulse post.",
+    });
+  }
+
+  return normalizePulsePostReply(reply as PulsePostReplyWithAuthor);
+}
+
+export async function addPulsePostReaction(input: PulsePostReactionInput) {
+  const [post, user] = await Promise.all([
+    getPublishedPulsePost(input.postId),
+    prisma.user.findUnique({
+      where: { id: input.userId },
+      include: { socialAccounts: true, traderProfile: true },
+    }),
+  ]);
+
+  if (!user) {
+    throw new AppError("User not found", {
+      code: "USER_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  const reaction = await prisma.pulsePostReaction.upsert({
+    where: {
+      postId_userId_type: {
+        postId: input.postId,
+        userId: input.userId,
+        type: PulsePostReactionType.LIKE,
+      },
+    },
+    create: {
+      postId: input.postId,
+      userId: input.userId,
+      type: PulsePostReactionType.LIKE,
+    },
+    update: {},
+    include: {
+      user: { include: { socialAccounts: true, traderProfile: true } },
+      post: true,
+    },
+  });
+
+  if (post.authorUserId !== input.userId) {
+    await createNotification({
+      userId: post.authorUserId,
+      actorUserId: input.userId,
+      type: "PULSE_POST_LIKE",
+      entityType: "PULSE_POST",
+      entityId: input.postId,
+      message: getActorDisplayName((reaction as PulsePostReactionWithUser).user) + " liked your Pulse post.",
+    });
+  }
+
+  const counts = await getPulsePostSocialCounts(input.postId);
+
+  return {
+    reaction: normalizePulsePostReaction(reaction),
+    counts,
+  };
+}
+
+export async function removePulsePostReaction(input: PulsePostReactionInput) {
+  await prisma.pulsePostReaction
+    .delete({
+      where: {
+        postId_userId_type: {
+          postId: input.postId,
+          userId: input.userId,
+          type: PulsePostReactionType.LIKE,
+        },
+      },
+    })
+    .catch(ignoreNotFound);
+
+  const counts = await getPulsePostSocialCounts(input.postId);
+
+  return { counts };
+}
+
+export async function addPulsePostBookmark(input: PulsePostBookmarkInput) {
+  const [post, user] = await Promise.all([
+    getPublishedPulsePost(input.postId),
+    prisma.user.findUnique({
+      where: { id: input.userId },
+      include: { socialAccounts: true, traderProfile: true },
+    }),
+  ]);
+
+  if (!user) {
+    throw new AppError("User not found", {
+      code: "USER_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  const bookmark = await prisma.pulsePostBookmark.upsert({
+    where: {
+      postId_userId: {
+        postId: input.postId,
+        userId: input.userId,
+      },
+    },
+    create: {
+      postId: input.postId,
+      userId: input.userId,
+    },
+    update: {},
+    include: {
+      user: { include: { socialAccounts: true, traderProfile: true } },
+      post: true,
+    },
+  });
+
+  if (post.authorUserId !== input.userId) {
+    await createNotification({
+      userId: post.authorUserId,
+      actorUserId: input.userId,
+      type: "PULSE_POST_REPOST",
+      entityType: "PULSE_POST",
+      entityId: input.postId,
+      message: getActorDisplayName((bookmark as PulsePostBookmarkWithUser).user) + " reposted your Pulse post.",
+    });
+  }
+
+  await notifyFollowers({
+    actorUserId: input.userId,
+    type: "FOLLOWING_PULSE_REPOST",
+    entityType: "PULSE_POST",
+    entityId: input.postId,
+    message: getActorDisplayName((bookmark as PulsePostBookmarkWithUser).user) + " reposted on Pulse.",
+  });
+
+  const counts = await getPulsePostSocialCounts(input.postId);
+
+  return {
+    bookmark: normalizePulsePostBookmark(bookmark),
+    counts,
+  };
+}
+
+export async function removePulsePostBookmark(input: PulsePostBookmarkInput) {
+  await prisma.pulsePostBookmark
+    .delete({
+      where: {
+        postId_userId: {
+          postId: input.postId,
+          userId: input.userId,
+        },
+      },
+    })
+    .catch(ignoreNotFound);
+
+  const counts = await getPulsePostSocialCounts(input.postId);
+
+  return { counts };
 }
 
 export async function followUser(input: FollowUserInput) {
@@ -877,6 +1224,16 @@ async function getSignalSocialCounts(signalId: string): Promise<SocialFeedCounts
   return { replies, reactions, bookmarks, copyIntents };
 }
 
+async function getPulsePostSocialCounts(postId: string): Promise<SocialFeedCounts> {
+  const [replies, reactions, bookmarks] = await Promise.all([
+    prisma.pulsePostReply.count({ where: { postId, status: "PUBLISHED" } }),
+    prisma.pulsePostReaction.count({ where: { postId } }),
+    prisma.pulsePostBookmark.count({ where: { postId } }),
+  ]);
+
+  return { replies, reactions, bookmarks, copyIntents: 0 };
+}
+
 async function getViewerState(userId: string, signalIds: string[]) {
   if (signalIds.length === 0) {
     return new Map<string, SocialViewerState>();
@@ -906,6 +1263,35 @@ async function getViewerState(userId: string, signalIds: string[]) {
   );
 }
 
+async function getPulsePostViewerState(userId: string, postIds: string[]) {
+  if (postIds.length === 0) {
+    return new Map<string, SocialViewerState>();
+  }
+
+  const [reactions, bookmarks] = await Promise.all([
+    prisma.pulsePostReaction.findMany({
+      where: { userId, postId: { in: postIds }, type: PulsePostReactionType.LIKE },
+      select: { postId: true },
+    }),
+    prisma.pulsePostBookmark.findMany({
+      where: { userId, postId: { in: postIds } },
+      select: { postId: true },
+    }),
+  ]);
+  const reactionIds = new Set(reactions.map((reaction) => reaction.postId));
+  const bookmarkIds = new Set(bookmarks.map((bookmark) => bookmark.postId));
+
+  return new Map(
+    postIds.map((postId) => [
+      postId,
+      {
+        reacted: reactionIds.has(postId),
+        bookmarked: bookmarkIds.has(postId),
+      },
+    ]),
+  );
+}
+
 function normalizeSocialFeedItem(
   signal: FeedSignal,
   viewerState: Map<string, SocialViewerState> | null,
@@ -926,6 +1312,42 @@ function normalizeSocialFeedItem(
   };
 }
 
+
+
+function normalizePulsePost(post: PulsePostWithRelations, viewer: SocialViewerState | null): NormalizedPulsePost {
+  return {
+    id: post.id,
+    authorUserId: post.authorUserId,
+    body: post.body,
+    mediaUrl: post.mediaUrl,
+    mediaType: post.mediaType,
+    status: post.status,
+    author: normalizeSocialActor(post.author),
+    counts: {
+      replies: post._count.replies,
+      reactions: post._count.reactions,
+      bookmarks: post._count.bookmarks,
+      copyIntents: 0,
+    },
+    viewer,
+    recentReplies: post.replies.map((reply) => normalizePulsePostReply(reply as PulsePostReplyWithAuthor)).reverse(),
+    createdAt: post.createdAt.toISOString(),
+    updatedAt: post.updatedAt.toISOString(),
+  };
+}
+
+function normalizePulsePostReply(reply: PulsePostReplyWithAuthor): NormalizedPulsePostReply {
+  return {
+    id: reply.id,
+    postId: reply.postId,
+    authorUserId: reply.authorUserId,
+    body: reply.body,
+    status: reply.status,
+    author: normalizeSocialActor(reply.author),
+    createdAt: reply.createdAt.toISOString(),
+    updatedAt: reply.updatedAt.toISOString(),
+  };
+}
 
 function normalizeUserFollow(follow: FollowWithUsers): NormalizedUserFollow {
   return {
@@ -1023,6 +1445,8 @@ function normalizeSocialActor(
     userId: user.id,
     displayName: user.displayName,
     handle: user.traderProfile?.handle ?? null,
+    traderProfileId: user.traderProfile?.id ?? null,
+    avatarUrl: user.traderProfile?.avatarUrl ?? account?.profileUrl ?? null,
     platform: account?.platform ?? null,
     platformUserId: account?.platformUserId ?? null,
     username: account?.username ?? null,
@@ -1056,6 +1480,27 @@ function normalizeSignalBookmark(bookmark: SignalBookmark) {
   return {
     id: bookmark.id,
     signalId: bookmark.signalId,
+    userId: bookmark.userId,
+    createdAt: bookmark.createdAt.toISOString(),
+    updatedAt: bookmark.updatedAt.toISOString(),
+  };
+}
+
+function normalizePulsePostReaction(reaction: PulsePostReaction) {
+  return {
+    id: reaction.id,
+    postId: reaction.postId,
+    userId: reaction.userId,
+    type: reaction.type,
+    createdAt: reaction.createdAt.toISOString(),
+    updatedAt: reaction.updatedAt.toISOString(),
+  };
+}
+
+function normalizePulsePostBookmark(bookmark: PulsePostBookmark) {
+  return {
+    id: bookmark.id,
+    postId: bookmark.postId,
     userId: bookmark.userId,
     createdAt: bookmark.createdAt.toISOString(),
     updatedAt: bookmark.updatedAt.toISOString(),
@@ -1137,6 +1582,19 @@ async function ensureSignalExists(signalId: string) {
       statusCode: 404,
     });
   }
+}
+
+async function getPublishedPulsePost(postId: string) {
+  const post = await prisma.pulsePost.findUnique({ where: { id: postId } });
+
+  if (!post || post.status !== "PUBLISHED") {
+    throw new AppError("Pulse post not found", {
+      code: "PULSE_POST_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  return post;
 }
 
 async function ensureUserExists(userId: string) {
