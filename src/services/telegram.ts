@@ -16,12 +16,14 @@ type TelegramUser = {
   id?: number;
   first_name?: string;
   username?: string;
+  is_bot?: boolean;
 };
 
 type TelegramMessage = {
   chat?: TelegramChat;
   from?: TelegramUser;
   text?: string;
+  new_chat_members?: TelegramUser[];
 };
 
 type TelegramChatMemberResponse = {
@@ -61,7 +63,12 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
 
   const chat = message.chat;
   const text = message.text?.trim() ?? "";
-  await rememberTelegramChat(chat);
+  const storedChat = await rememberTelegramChat(chat);
+
+  if (message.new_chat_members?.length) {
+    const welcomed = await welcomeNewTelegramMembers(chat, message.new_chat_members, storedChat.role);
+    if (welcomed) return { handled: true, command: "welcome" };
+  }
 
   if (!text.startsWith("/")) {
     const stored = await prisma.telegramChat.findUnique({ where: { chatId: String(chat.id) } });
@@ -213,6 +220,27 @@ export async function sendMarketDigestToRole(role = TelegramChatRole.MARKET_ALER
   const digest = await buildMarketDigest();
   const results = await Promise.all(chats.map((chat) => sendTelegramMessage(chat.chatId, digest)));
   return { sent: results.filter(Boolean).length };
+}
+
+async function welcomeNewTelegramMembers(chat: TelegramChat, members: TelegramUser[], role: TelegramChatRole) {
+  if (role === TelegramChatRole.SUPPORT) return false;
+
+  const realMembers = members.filter((member) => !member.is_bot);
+  if (realMembers.length === 0) return false;
+
+  const names = realMembers.map(telegramMentionName).join(", ");
+  const text = [
+    "Welcome " + names + " to Conviction Markets.",
+    "Test the product and share your feedback: https://convictionmarkets.xyz",
+  ].join("\n");
+
+  return sendTelegramMessage(String(chat.id), text);
+}
+
+function telegramMentionName(user: TelegramUser) {
+  if (user.username) return "@" + user.username;
+  const name = user.first_name?.trim() || "there";
+  return name;
 }
 
 async function supportAlertChats() {
