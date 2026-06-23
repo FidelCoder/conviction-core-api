@@ -44,8 +44,13 @@ export type NormalizedMarket = {
 };
 
 export type MarketProviderMetadata = {
+  discoveryRegion?: string | null;
+  discoveryTopics?: string[];
   eventSlug?: string | null;
   eventTitle?: string | null;
+  groupItemTitle?: string | null;
+  iconUrl?: string | null;
+  imageUrl?: string | null;
   liquidity?: string | null;
   oneDayPriceChange?: string | null;
   primaryTag?: string | null;
@@ -333,8 +338,24 @@ function getMarketSortScore(market: NormalizedMarket) {
   const volume = Number(market.volume24hr ?? market.volume1wk ?? market.volume1mo ?? market.providerMetadata.totalVolume ?? 0);
   const liquidity = Number(market.liquidity ?? 0);
   const liveBonus = market.status === "ACTIVE" ? 1_000_000 : 0;
+  const discoveryBonus = getDiscoverySortBonus(market);
 
-  return liveBonus + volume + liquidity / 100;
+  return liveBonus + discoveryBonus + volume + liquidity / 100;
+}
+
+function getDiscoverySortBonus(market: NormalizedMarket) {
+  const region = market.providerMetadata.discoveryRegion;
+  const topics = new Set(market.providerMetadata.discoveryTopics ?? []);
+  let bonus = 0;
+
+  if (region === "Africa") bonus += 75_000;
+  if (region === "Global") bonus += 25_000;
+  if (topics.has("African Football")) bonus += 85_000;
+  if (topics.has("World Cup")) bonus += 45_000;
+  if (topics.has("Football")) bonus += 30_000;
+  if (topics.has("Cricket") || topics.has("Rugby")) bonus += 20_000;
+
+  return bonus;
 }
 
 function parseProviderMetadata(value: string | null): MarketProviderMetadata {
@@ -344,8 +365,13 @@ function parseProviderMetadata(value: string | null): MarketProviderMetadata {
     const parsed = JSON.parse(value) as Record<string, unknown>;
 
     return {
+      discoveryRegion: normalizeMetadataString(parsed.discoveryRegion),
+      discoveryTopics: normalizeMetadataStringArray(parsed.discoveryTopics),
       eventSlug: normalizeMetadataString(parsed.eventSlug),
       eventTitle: normalizeMetadataString(parsed.eventTitle),
+      groupItemTitle: normalizeMetadataString(parsed.groupItemTitle),
+      iconUrl: normalizeMetadataString(parsed.iconUrl),
+      imageUrl: normalizeMetadataString(parsed.imageUrl),
       liquidity: normalizeMetadataString(parsed.liquidity),
       oneDayPriceChange: normalizeMetadataString(parsed.oneDayPriceChange),
       primaryTag: normalizeMetadataString(parsed.primaryTag),

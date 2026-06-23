@@ -11,7 +11,7 @@ type MarketSyncQuery = {
   limit?: string;
 };
 
-const maxServerlessSyncLimit = 60;
+const maxServerlessSyncLimit = 180;
 
 export async function registerOperationsRoutes(app: FastifyInstance) {
   app.post<{ Querystring: MarketSyncQuery }>(

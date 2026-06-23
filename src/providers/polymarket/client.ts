@@ -14,6 +14,7 @@ const gammaMarketSchema = z.object({
   question: z.string().min(1),
   description: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
+  groupItemTitle: z.string().nullable().optional(),
   active: z.boolean().optional(),
   closed: z.boolean().optional(),
   archived: z.boolean().optional(),
@@ -30,6 +31,8 @@ const gammaMarketSchema = z.object({
   lastTradePrice: z.union([z.string(), z.number()]).nullable().optional(),
   bestBid: z.union([z.string(), z.number()]).nullable().optional(),
   bestAsk: z.union([z.string(), z.number()]).nullable().optional(),
+  icon: z.string().nullable().optional(),
+  image: z.string().nullable().optional(),
   liquidity: z.union([z.string(), z.number()]).nullable().optional(),
   liquidityClob: z.union([z.string(), z.number()]).nullable().optional(),
   volume: z.union([z.string(), z.number()]).nullable().optional(),
@@ -41,6 +44,8 @@ const gammaMarketSchema = z.object({
   events: z
     .array(
       z.object({
+        icon: z.string().nullable().optional(),
+        image: z.string().nullable().optional(),
         slug: z.string().nullable().optional(),
         title: z.string().nullable().optional(),
       }),
@@ -52,6 +57,8 @@ const gammaEventSchema = z.object({
   id: z.union([z.string(), z.number()]).transform(String),
   title: z.string().nullable().optional(),
   slug: z.string().nullable().optional(),
+  icon: z.string().nullable().optional(),
+  image: z.string().nullable().optional(),
   volume: z.union([z.string(), z.number()]).nullable().optional(),
   volume24hr: z.union([z.string(), z.number()]).nullable().optional(),
   volume1wk: z.union([z.string(), z.number()]).nullable().optional(),
@@ -71,6 +78,7 @@ type GammaTag = z.infer<typeof gammaTagSchema>;
 
 const discoveryEventLanes = [
   { label: "World Cup", tagIds: ["519", "102232", "102350"], eventLimit: 16, marketLimit: 36, perEventMarketLimit: 7 },
+  { label: "Football", tagIds: ["100350", "9545"], eventLimit: 18, marketLimit: 34, perEventMarketLimit: 4 },
   { label: "Sports", tagIds: ["1"], eventLimit: 18, marketLimit: 32, perEventMarketLimit: 3 },
   { label: "Esports", tagIds: ["64"], eventLimit: 12, marketLimit: 24, perEventMarketLimit: 4 },
   { label: "Geopolitics", tagIds: ["100265", "842", "1396"], eventLimit: 12, marketLimit: 28, perEventMarketLimit: 4 },
@@ -78,8 +86,98 @@ const discoveryEventLanes = [
   { label: "Crypto", tagIds: ["21"], eventLimit: 12, marketLimit: 28, perEventMarketLimit: 4 },
   { label: "Finance", tagIds: ["120"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
   { label: "Tech", tagIds: ["1401"], eventLimit: 8, marketLimit: 18, perEventMarketLimit: 4 },
-  { label: "Soccer", tagIds: ["100350"], eventLimit: 10, marketLimit: 18, perEventMarketLimit: 3 },
   { label: "World", tagIds: ["101970"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
+] as const;
+
+const discoveryKeywordLanes = [
+  {
+    label: "Africa",
+    eventLimit: 260,
+    marketLimit: 34,
+    perEventMarketLimit: 4,
+    terms: [
+      "africa",
+      "african",
+      "afcon",
+      "caf ",
+      "caf-",
+      "cup of nations",
+      "nigeria",
+      "kenya",
+      "ghana",
+      "south africa",
+      "ethiopia",
+      "egypt",
+      "morocco",
+      "algeria",
+      "tunisia",
+      "senegal",
+      "ivory coast",
+      "cote d'ivoire",
+      "cameroon",
+      "uganda",
+      "tanzania",
+      "rwanda",
+      "zambia",
+      "angola",
+      "mali",
+      "dr congo",
+      "lagos",
+      "nairobi",
+      "johannesburg",
+      "cairo",
+      "casablanca",
+    ],
+  },
+  {
+    label: "Africa World Cup",
+    eventLimit: 320,
+    marketLimit: 36,
+    perEventMarketLimit: 5,
+    terms: [
+      "africa world cup",
+      "african world cup",
+      "caf world cup",
+      "world cup qualifier",
+      "world cup qualification",
+      "nigeria world cup",
+      "ghana world cup",
+      "morocco world cup",
+      "senegal world cup",
+      "egypt world cup",
+      "south africa world cup",
+      "cameroon world cup",
+    ],
+  },
+  {
+    label: "Global Football",
+    eventLimit: 220,
+    marketLimit: 44,
+    perEventMarketLimit: 5,
+    terms: [
+      "world cup",
+      "fifa",
+      "afcon",
+      "caf ",
+      "champions league",
+      "premier league",
+      "la liga",
+      "serie a",
+      "bundesliga",
+      "copa america",
+      "euros",
+      "uefa",
+      "football",
+      "soccer",
+    ],
+  },
+  {
+    label: "Global Sports",
+    eventLimit: 180,
+    marketLimit: 28,
+    perEventMarketLimit: 4,
+    terms: ["cricket", "rugby", "formula 1", "f1", "tennis", "ufc", "boxing", "olympics"],
+  },
 ] as const;
 
 type EventCollectionOptions = {
@@ -87,6 +185,7 @@ type EventCollectionOptions = {
   marketLimit: number;
   perEventMarketLimit: number;
   seenEventIds: Set<string>;
+  keywordTerms?: readonly string[];
 };
 
 export class PolymarketProviderError extends Error {
@@ -185,6 +284,29 @@ export class PolymarketProvider implements MarketProvider {
       }
     }
 
+    for (const lane of discoveryKeywordLanes) {
+      if (markets.size >= this.listLimit) {
+        break;
+      }
+
+      const laneMarketLimit = Math.min(
+        getScaledLaneMarketLimit(lane.marketLimit, this.listLimit),
+        this.listLimit - markets.size,
+      );
+
+      await this.collectMarketsFromEvents(
+        markets,
+        {},
+        {
+          eventLimit: lane.eventLimit,
+          keywordTerms: lane.terms,
+          marketLimit: laneMarketLimit,
+          perEventMarketLimit: lane.perEventMarketLimit,
+          seenEventIds,
+        },
+      );
+    }
+
     if (markets.size < this.listLimit) {
       await this.collectMarketsFromEvents(markets, {}, {
         eventLimit: this.listLimit,
@@ -237,12 +359,21 @@ export class PolymarketProvider implements MarketProvider {
       }
 
       for (const event of parsed.data) {
+        scannedEvents += 1;
+
+        if (options.keywordTerms && !eventMatchesTerms(event, options.keywordTerms)) {
+          if (scannedEvents >= options.eventLimit) {
+            break;
+          }
+
+          continue;
+        }
+
         if (options.seenEventIds.has(event.id)) {
           continue;
         }
 
         options.seenEventIds.add(event.id);
-        scannedEvents += 1;
         addedMarkets += addEventMarkets(
           markets,
           event,
@@ -335,9 +466,18 @@ export function mapGammaMarket(market: GammaMarket, event?: GammaEvent): Provide
   const tagLabels = getTagLabels(event?.tags);
   const tagSlugs = getTagSlugs(event?.tags);
   const primaryTag = getPrimaryEventTag(market, event, tagLabels, tagSlugs);
+  const imageUrl = firstDefined(market.image, event?.image, market.events?.[0]?.image, null);
+  const iconUrl = firstDefined(market.icon, event?.icon, market.events?.[0]?.icon, null);
+  const discoveryRegion = inferDiscoveryRegion(market, event, tagLabels, tagSlugs);
+  const discoveryTopics = inferDiscoveryTopics(market, event, tagLabels, tagSlugs, primaryTag);
   const metadata = buildMarketMetadata({
+    discoveryRegion,
+    discoveryTopics,
     eventSlug: event?.slug ?? null,
     eventTitle: event?.title ?? null,
+    groupItemTitle: market.groupItemTitle ?? null,
+    iconUrl,
+    imageUrl,
     liquidity,
     oneDayPriceChange: market.oneDayPriceChange,
     primaryTag,
@@ -468,6 +608,20 @@ function addEventMarkets(
   return addedFromEvent;
 }
 
+function eventMatchesTerms(event: GammaEvent, terms: readonly string[]) {
+  return matchesAny(getEventSearchText(event), terms);
+}
+
+function getEventSearchText(event: GammaEvent) {
+  const tagLabels = getTagLabels(event.tags);
+  const tagSlugs = getTagSlugs(event.tags);
+  const marketText = (event.markets ?? [])
+    .map((market) => [market.question, market.description, market.category, market.groupItemTitle].filter(Boolean).join(" "))
+    .join(" ");
+
+  return [event.title, event.slug, marketText, ...tagLabels, ...tagSlugs].filter(Boolean).join(" ").toLowerCase();
+}
+
 function getScaledLaneMarketLimit(baseLimit: number, totalLimit: number) {
   return Math.max(4, Math.ceil((baseLimit / 250) * totalLimit));
 }
@@ -484,8 +638,13 @@ function getGammaMarketScore(market: GammaMarket) {
 }
 
 function buildMarketMetadata(input: {
+  discoveryRegion: string | null;
+  discoveryTopics: string[];
   eventSlug: string | null;
   eventTitle: string | null;
+  groupItemTitle: string | null;
+  iconUrl: string | null;
+  imageUrl: string | null;
   liquidity: string | number | null;
   oneDayPriceChange: string | number | null | undefined;
   primaryTag: string | null;
@@ -498,8 +657,13 @@ function buildMarketMetadata(input: {
   volume24hr: string | number | null;
 }) {
   const metadata = {
+    discoveryRegion: input.discoveryRegion,
+    discoveryTopics: input.discoveryTopics,
     eventSlug: input.eventSlug,
     eventTitle: input.eventTitle,
+    groupItemTitle: input.groupItemTitle,
+    iconUrl: input.iconUrl,
+    imageUrl: input.imageUrl,
     liquidity: normalizeNumericString(input.liquidity),
     oneDayPriceChange: normalizeNumericString(input.oneDayPriceChange),
     primaryTag: input.primaryTag,
@@ -544,18 +708,113 @@ function getFirstTagLabel(tags: GammaTag[] | undefined) {
   return getTagLabels(tags)[0] ?? null;
 }
 
+function inferDiscoveryTopics(
+  market: GammaMarket,
+  event: GammaEvent | undefined,
+  tagLabels: string[],
+  tagSlugs: string[],
+  primaryTag: string | null,
+) {
+  const text = getMarketSearchText(market, event, tagLabels, tagSlugs);
+  const topics = new Set<string>();
+
+  if (primaryTag) topics.add(primaryTag);
+  if (matchesAny(text, ["afcon", "caf ", "caf-", "africa cup of nations", "cup of nations"])) {
+    topics.add("African Football");
+    topics.add("Sports");
+  }
+  if (matchesAny(text, ["world cup", "fifa", "world cup qualifier", "world cup qualification"])) {
+    topics.add("World Cup");
+    topics.add("Sports");
+  }
+  if (matchesAny(text, ["football", "soccer", "champions league", "premier league", "la liga", "serie a", "bundesliga", "uefa"])) {
+    topics.add("Football");
+    topics.add("Sports");
+  }
+  if (matchesAny(text, ["cricket"])) {
+    topics.add("Cricket");
+    topics.add("Sports");
+  }
+  if (matchesAny(text, ["rugby"])) {
+    topics.add("Rugby");
+    topics.add("Sports");
+  }
+  if (matchesAny(text, ["esports", "counter-strike", "cs2", "league of legends", "valorant", "dota"])) topics.add("Esports");
+  if (matchesAny(text, ["crypto", "bitcoin", "btc", "ethereum", "solana", "airdrop"])) topics.add("Crypto");
+  if (matchesAny(text, ["geopolitics", "nato", "hormuz", "gaza", "iran", "russia", "ukraine", "taiwan"])) topics.add("Geopolitics");
+  if (matchesAny(text, ["election", "elections", "politics", "president", "parliament", "government"])) topics.add("Politics");
+  if (matchesAny(text, ["finance", "business", "earnings", "ipo", "stocks", "fed", "rates"])) topics.add("Finance");
+  if (matchesAny(text, ["tech", "technology", "openai", " ai ", "nvidia", "startup"])) topics.add("Tech");
+  if (matchesAny(text, ["weather", "hurricane", "temperature", "rain", "flood", "wildfire"])) topics.add("Weather");
+  if (matchesAny(text, ["culture", "pop culture", "movie", "music", "album", "celebrity"])) topics.add("Culture");
+
+  return Array.from(topics);
+}
+
+function inferDiscoveryRegion(
+  market: GammaMarket,
+  event: GammaEvent | undefined,
+  tagLabels: string[],
+  tagSlugs: string[],
+) {
+  const text = getMarketSearchText(market, event, tagLabels, tagSlugs);
+
+  if (matchesAny(text, ["crypto", "bitcoin", "ethereum", "airdrop", "token", "defi", "solana", "onchain", "on-chain"])) {
+    return "Crypto-native";
+  }
+
+  if (matchesAny(text, ["israel", "hamas", "iran", "saudi", "uae", "qatar", "gaza", "middle east", "palestine", "abraham accords"])) return "Middle East";
+  if (matchesAny(text, [
+    "africa",
+    "african",
+    "afcon",
+    "caf ",
+    "caf-",
+    "nigeria",
+    "kenya",
+    "ghana",
+    "south africa",
+    "ethiopia",
+    "egypt",
+    "morocco",
+    "algeria",
+    "tunisia",
+    "senegal",
+    "ivory coast",
+    "cote d'ivoire",
+    "cameroon",
+    "uganda",
+    "tanzania",
+    "rwanda",
+    "zambia",
+    "angola",
+    "mali",
+    "dr congo",
+    "lagos",
+    "nairobi",
+    "johannesburg",
+    "cairo",
+    "casablanca",
+  ])) return "Africa";
+  if (matchesAny(text, ["china", "india", "japan", "korea", "singapore", "taiwan", "asia", "indonesia", "pakistan", "bangladesh"])) return "Asia";
+  if (matchesAny(text, ["uk", "britain", "london", "europe", "eu ", "france", "germany", "spain", "italy", "russia", "ukraine"])) return "Europe";
+  if (matchesAny(text, ["brazil", "argentina", "mexico", "colombia", "chile", "latin america", "latam"])) return "Latin America";
+  if (matchesAny(text, ["nba", "nfl", "mlb", "new york", "san antonio", "oklahoma", "vegas", "u.s.", "usa", "america", "united states"])) return "United States";
+
+  return "Global";
+}
+
 function getPrimaryEventTag(
   market: GammaMarket,
   event: GammaEvent | undefined,
   tagLabels: string[],
   tagSlugs: string[],
 ) {
-  const text = [market.question, market.category, market.description, event?.title, ...tagLabels, ...tagSlugs]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+  const text = getMarketSearchText(market, event, tagLabels, tagSlugs);
 
+  if (matchesAny(text, ["afcon", "caf ", "caf-", "africa cup of nations", "cup of nations"])) return "African Football";
   if (matchesAny(text, ["world cup", "fifa world cup", "2026-fifa-world-cup", "fifa-world-cup"])) return "World Cup";
+  if (matchesAny(text, ["football", "soccer", "champions league", "premier league", "la liga", "serie a", "bundesliga", "uefa"])) return "Football";
   if (matchesAny(text, ["esports", "counter-strike", "cs2", "league of legends", "valorant", "dota"])) return "Esports";
   if (matchesAny(text, ["geopolitics", "foreign affairs", "international affairs", "nato", "hormuz"])) return "Geopolitics";
   if (matchesAny(text, ["crypto", "bitcoin", "btc", "ethereum", "solana", "airdrop"])) return "Crypto";
@@ -570,6 +829,44 @@ function getPrimaryEventTag(
   return null;
 }
 
-function matchesAny(text: string, terms: string[]) {
-  return terms.some((term) => text.includes(term));
+function getMarketSearchText(
+  market: GammaMarket,
+  event: GammaEvent | undefined,
+  tagLabels: string[],
+  tagSlugs: string[],
+) {
+  return [
+    market.question,
+    market.category,
+    market.description,
+    market.groupItemTitle,
+    market.slug,
+    event?.title,
+    event?.slug,
+    ...tagLabels,
+    ...tagSlugs,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function matchesAny(text: string, terms: readonly string[]) {
+  const normalizedText = text.toLowerCase();
+
+  return terms.some((term) => {
+    const normalizedTerm = term.toLowerCase().trim();
+
+    if (!normalizedTerm) return false;
+
+    if (/^[a-z0-9]+$/i.test(normalizedTerm)) {
+      return new RegExp("\\b" + escapeRegExp(normalizedTerm) + "\\b", "i").test(normalizedText);
+    }
+
+    return normalizedText.includes(normalizedTerm);
+  });
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
