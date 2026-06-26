@@ -10,6 +10,14 @@ const optionalEvmAddress = z.preprocess(
     .optional(),
 );
 
+const optionalPrivateKey = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+  z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{64}$/)
+    .optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -22,6 +30,19 @@ const envSchema = z.object({
   CRON_SECRET: z.string().min(16).optional(),
   CONVICTION_VAULT_ADDRESS: optionalEvmAddress,
   CONVICTION_EXECUTION_ADAPTER_ADDRESS: optionalEvmAddress,
+  CONVICTION_EXECUTION_MODE: z.enum(["disabled", "testnet", "polymarket"]).default("disabled"),
+  CONVICTION_EXECUTION_SIGNER_PRIVATE_KEY: optionalPrivateKey,
+  BASE_SEPOLIA_RPC_URL: z.string().url().default("https://sepolia.base.org"),
+  ETHEREUM_SEPOLIA_RPC_URL: z
+    .string()
+    .url()
+    .default("https://ethereum-sepolia-rpc.publicnode.com"),
+  ARBITRUM_SEPOLIA_RPC_URL: z.string().url().default("https://sepolia-rollup.arbitrum.io/rpc"),
+  POLYMARKET_CLOB_API_URL: z.string().url().default("https://clob.polymarket.com"),
+  POLYMARKET_CLOB_API_KEY: z.string().min(1).optional(),
+  POLYMARKET_CLOB_API_SECRET: z.string().min(1).optional(),
+  POLYMARKET_CLOB_API_PASSPHRASE: z.string().min(1).optional(),
+  POLYMARKET_CLOB_FUNDER_ADDRESS: optionalEvmAddress,
   TELEGRAM_BOT_TOKEN: z.string().min(8).optional(),
   TELEGRAM_SUPPORT_CHAT_ID: z.string().min(1).optional(),
   TELEGRAM_WEBHOOK_SECRET: z.string().min(16).optional(),
@@ -52,6 +73,17 @@ export const env = {
   cronSecret: parsedEnv.data.CRON_SECRET ?? null,
   convictionVaultAddress: parsedEnv.data.CONVICTION_VAULT_ADDRESS ?? null,
   convictionExecutionAdapterAddress: parsedEnv.data.CONVICTION_EXECUTION_ADAPTER_ADDRESS ?? null,
+  convictionExecutionMode: parsedEnv.data.CONVICTION_EXECUTION_MODE,
+  convictionExecutionSignerPrivateKey:
+    parsedEnv.data.CONVICTION_EXECUTION_SIGNER_PRIVATE_KEY ?? null,
+  baseSepoliaRpcUrl: parsedEnv.data.BASE_SEPOLIA_RPC_URL,
+  ethereumSepoliaRpcUrl: parsedEnv.data.ETHEREUM_SEPOLIA_RPC_URL,
+  arbitrumSepoliaRpcUrl: parsedEnv.data.ARBITRUM_SEPOLIA_RPC_URL,
+  polymarketClobApiUrl: parsedEnv.data.POLYMARKET_CLOB_API_URL,
+  polymarketClobApiKey: parsedEnv.data.POLYMARKET_CLOB_API_KEY ?? null,
+  polymarketClobApiSecret: parsedEnv.data.POLYMARKET_CLOB_API_SECRET ?? null,
+  polymarketClobApiPassphrase: parsedEnv.data.POLYMARKET_CLOB_API_PASSPHRASE ?? null,
+  polymarketClobFunderAddress: parsedEnv.data.POLYMARKET_CLOB_FUNDER_ADDRESS ?? null,
   telegramBotToken: parsedEnv.data.TELEGRAM_BOT_TOKEN ?? null,
   telegramSupportChatId: parsedEnv.data.TELEGRAM_SUPPORT_CHAT_ID ?? null,
   telegramWebhookSecret: parsedEnv.data.TELEGRAM_WEBHOOK_SECRET ?? null,

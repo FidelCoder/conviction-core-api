@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 
 import { sendSuccess } from "../lib/responses.js";
-import { getExecutionCapabilities, startPositionExecution } from "../services/execution.js";
+import {
+  getExecutionCapabilities,
+  settlePositionExecution,
+  startPositionExecution,
+} from "../services/execution.js";
 
 type PositionExecutionParams = {
   positionId: string;
@@ -27,6 +31,26 @@ export async function registerExecutionRoutes(app: FastifyInstance) {
     },
     async (request, reply) => {
       const executionAttempt = await startPositionExecution(request.params.positionId);
+
+      return sendSuccess(reply, { executionAttempt }, 202);
+    },
+  );
+
+  app.post<{ Params: PositionExecutionParams }>(
+    "/execution/positions/:positionId/settle",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["positionId"],
+          properties: {
+            positionId: { type: "string", minLength: 1 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const executionAttempt = await settlePositionExecution(request.params.positionId);
 
       return sendSuccess(reply, { executionAttempt }, 202);
     },
