@@ -311,14 +311,14 @@ export async function updateContractTransaction(id: string, input: RecordContrac
   });
 
   if (updated.positionId && updated.transactionHash) {
-    await prisma.position.update({
-      where: { id: updated.positionId },
-      data: {
-        chainTransactionHash: updated.transactionHash,
-        status: mapContractTransactionStatusToPositionStatus(updated.status),
-        openedAt: updated.status === "CONFIRMED" ? (existing.createdAt ?? new Date()) : undefined,
-      },
-    });
+    const positionUpdate = getPositionUpdateFromContractTransaction(updated);
+
+    if (positionUpdate) {
+      await prisma.position.update({
+        where: { id: updated.positionId },
+        data: positionUpdate,
+      });
+    }
   }
 
   return normalizeContractTransaction(updated);
@@ -509,9 +509,18 @@ function validateEvmAddress(value: string, field: string) {
 }
 
 
-function mapContractTransactionStatusToPositionStatus(status: ContractTransactionStatus) {
-  if (status === "CONFIRMED") return "EXECUTED";
-  if (status === "FAILED" || status === "CANCELLED") return "FAILED";
+function getPositionUpdateFromContractTransaction(transaction: ContractTransaction) {
+  if (transaction.type !== "MARGIN_INTENT") return null;
 
-  return "PENDING_EXECUTION";
+  const data: Prisma.PositionUpdateInput = {
+    chainTransactionHash: transaction.transactionHash,
+  };
+
+  if (transaction.status === "FAILED" || transaction.status === "CANCELLED") {
+    data.status = PositionStatus.FAILED;
+  } else {
+    data.status = PositionStatus.PENDING_EXECUTION;
+  }
+
+  return data;
 }
