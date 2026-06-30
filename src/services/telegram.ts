@@ -1,9 +1,22 @@
-import { TelegramChatRole } from "@prisma/client";
+import { OmnistonQuoteStatus, TelegramChatRole } from "@prisma/client";
 
 import { env } from "../config/index.js";
 import { prisma } from "../lib/prisma.js";
 import { listMarkets } from "./markets.js";
-import { checkSupportAiProvider, createSupportAnswer, getSupportAiRuntimeStatus } from "./support-ai.js";
+import { recordOmnistonQuoteEvent } from "./omniston-quotes.js";
+import {
+  OmnistonNoQuoteError,
+  OmnistonQuoteDisabledError,
+  OmnistonQuoteInputError,
+  type OmnistonQuoteResult,
+  OmnistonQuoteService,
+  OmnistonQuoteTimeoutError,
+} from "./omniston-quote-service.js";
+import {
+  checkSupportAiProvider,
+  createSupportAnswer,
+  getSupportAiRuntimeStatus,
+} from "./support-ai.js";
 import { createSupportReply, resolveSupportTicket } from "./support.js";
 
 type TelegramChat = {
@@ -66,7 +79,11 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   const storedChat = await rememberTelegramChat(chat);
 
   if (message.new_chat_members?.length) {
-    const welcomed = await welcomeNewTelegramMembers(chat, message.new_chat_members, storedChat.role);
+    const welcomed = await welcomeNewTelegramMembers(
+      chat,
+      message.new_chat_members,
+      storedChat.role,
+    );
     if (welcomed) return { handled: true, command: "welcome" };
   }
 
@@ -84,10 +101,21 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   const normalizedText = normalizeTelegramCommandText(text);
   const [rawCommand, ...rawArgs] = normalizedText.split(/\s+/);
   const commandToken = rawCommand.split("@")[0].toLowerCase();
-  const aiColonQuestion = commandToken.startsWith("/ai:") ? commandToken.slice("/ai:".length).trim() : "";
-  const askColonQuestion = commandToken.startsWith("/ask:") ? commandToken.slice("/ask:".length).trim() : "";
-  const command = commandToken.startsWith("/ai:") ? "/ai" : commandToken.startsWith("/ask:") ? "/ask" : commandToken;
-  const args = aiColonQuestion || askColonQuestion ? [aiColonQuestion || askColonQuestion, ...rawArgs] : rawArgs;
+  const aiColonQuestion = commandToken.startsWith("/ai:")
+    ? commandToken.slice("/ai:".length).trim()
+    : "";
+  const askColonQuestion = commandToken.startsWith("/ask:")
+    ? commandToken.slice("/ask:".length).trim()
+    : "";
+  const command = commandToken.startsWith("/ai:")
+    ? "/ai"
+    : commandToken.startsWith("/ask:")
+      ? "/ask"
+      : commandToken;
+  const args =
+    aiColonQuestion || askColonQuestion
+      ? [aiColonQuestion || askColonQuestion, ...rawArgs]
+      : rawArgs;
 
   if (command === "/start") {
     await sendTelegramMessage(String(chat.id), startMessage(chat.id));
@@ -96,7 +124,10 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
 
   if (command === "/help") {
     const stored = await prisma.telegramChat.findUnique({ where: { chatId: String(chat.id) } });
-    await sendTelegramMessage(String(chat.id), helpMessage(stored?.role ?? TelegramChatRole.GENERAL));
+    await sendTelegramMessage(
+      String(chat.id),
+      helpMessage(stored?.role ?? TelegramChatRole.GENERAL),
+    );
     return { handled: true, command };
   }
 
@@ -104,7 +135,10 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     const question = normalizeAiQuestion(args.join(" "));
 
     if (!question) {
-      await sendTelegramMessage(String(chat.id), "Ask like this: /ask What is vault liquidity risk?");
+      await sendTelegramMessage(
+        String(chat.id),
+        "Ask like this: /ask What is vault liquidity risk?",
+      );
       return { handled: true, command };
     }
 
@@ -117,7 +151,10 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     const role = stored?.role ?? TelegramChatRole.GENERAL;
 
     if (role !== TelegramChatRole.SUPPORT && !(await isTelegramAdmin(chat.id, message.from))) {
-      await sendTelegramMessage(String(chat.id), "Only group admins can view this community chat id.");
+      await sendTelegramMessage(
+        String(chat.id),
+        "Only group admins can view this community chat id.",
+      );
       return { handled: true, command };
     }
 
@@ -130,7 +167,10 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     const role = requested ? roleAliases[requested] : null;
 
     if (!role) {
-      await sendTelegramMessage(String(chat.id), "Usage: /role support | /role alerts | /role general");
+      await sendTelegramMessage(
+        String(chat.id),
+        "Usage: /role support | /role alerts | /role general",
+      );
       return { handled: true, command };
     }
 
@@ -140,12 +180,25 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     }
 
     await setTelegramChatRole(String(chat.id), role, chat);
-    await sendTelegramMessage(String(chat.id), "This chat is now registered as " + roleLabel(role) + ".");
+    await sendTelegramMessage(
+      String(chat.id),
+      "This chat is now registered as " + roleLabel(role) + ".",
+    );
     return { handled: true, command };
   }
 
   if (command === "/markets") {
     await sendTelegramMessage(String(chat.id), await buildMarketDigest());
+    return { handled: true, command };
+  }
+
+  if (command === "/quote_status") {
+    await sendTelegramMessage(String(chat.id), omnistonQuoteStatusMessage());
+    return { handled: true, command };
+  }
+
+  if (command === "/quote") {
+    await sendTelegramMessage(String(chat.id), await handleOmnistonQuoteCommand(args, message));
     return { handled: true, command };
   }
 
@@ -158,7 +211,10 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   if (command === "/reply") {
     const stored = await prisma.telegramChat.findUnique({ where: { chatId: String(chat.id) } });
     if ((stored?.role ?? TelegramChatRole.GENERAL) !== TelegramChatRole.SUPPORT) {
-      await sendTelegramMessage(String(chat.id), "Support replies can only be sent from the support group.");
+      await sendTelegramMessage(
+        String(chat.id),
+        "Support replies can only be sent from the support group.",
+      );
       return { handled: true, command };
     }
     const result = await handleSupportReplyCommand(args, message);
@@ -169,7 +225,10 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
   if (command === "/resolve") {
     const stored = await prisma.telegramChat.findUnique({ where: { chatId: String(chat.id) } });
     if ((stored?.role ?? TelegramChatRole.GENERAL) !== TelegramChatRole.SUPPORT) {
-      await sendTelegramMessage(String(chat.id), "Tickets can only be resolved from the support group.");
+      await sendTelegramMessage(
+        String(chat.id),
+        "Tickets can only be resolved from the support group.",
+      );
       return { handled: true, command };
     }
     const result = await handleSupportResolveCommand(args, message);
@@ -179,16 +238,23 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
 
   if (command === "/status") {
     const stored = await prisma.telegramChat.findUnique({ where: { chatId: String(chat.id) } });
-    await sendTelegramMessage(String(chat.id), [
-      "Conviction bot status",
-      "Chat id: " + chat.id,
-      "Role: " + roleLabel(stored?.role ?? TelegramChatRole.GENERAL),
-      "Support alerts: " + (env.telegramSupportChatId ? "configured" : "missing TELEGRAM_SUPPORT_CHAT_ID"),
-    ].join("\n"));
+    await sendTelegramMessage(
+      String(chat.id),
+      [
+        "Conviction bot status",
+        "Chat id: " + chat.id,
+        "Role: " + roleLabel(stored?.role ?? TelegramChatRole.GENERAL),
+        "Support alerts: " +
+          (env.telegramSupportChatId ? "configured" : "missing TELEGRAM_SUPPORT_CHAT_ID"),
+      ].join("\n"),
+    );
     return { handled: true, command };
   }
 
-  await sendTelegramMessage(String(chat.id), "Unknown command. Send /help for Conviction bot commands.");
+  await sendTelegramMessage(
+    String(chat.id),
+    "Unknown command. Send /help for Conviction bot commands.",
+  );
   return { handled: true, command };
 }
 
@@ -207,7 +273,9 @@ export async function sendSupportTicketAlert(ticket: SupportTicketAlert) {
     ticket.userId ? "User: " + ticket.userId : null,
     "Subject: " + ticket.subject,
     "Summary: " + ticket.summary,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const results = await Promise.all(chats.map((chatId) => sendTelegramMessage(chatId, text)));
   return results.some(Boolean);
@@ -222,7 +290,11 @@ export async function sendMarketDigestToRole(role = TelegramChatRole.MARKET_ALER
   return { sent: results.filter(Boolean).length };
 }
 
-async function welcomeNewTelegramMembers(chat: TelegramChat, members: TelegramUser[], role: TelegramChatRole) {
+async function welcomeNewTelegramMembers(
+  chat: TelegramChat,
+  members: TelegramUser[],
+  role: TelegramChatRole,
+) {
   if (role === TelegramChatRole.SUPPORT) return false;
 
   const realMembers = members.filter((member) => !member.is_bot);
@@ -269,7 +341,10 @@ async function rememberTelegramChat(chat: TelegramChat) {
       chatId: String(chat.id),
       title: chat.title ?? null,
       type: chat.type ?? null,
-      role: env.telegramSupportChatId === String(chat.id) ? TelegramChatRole.SUPPORT : TelegramChatRole.GENERAL,
+      role:
+        env.telegramSupportChatId === String(chat.id)
+          ? TelegramChatRole.SUPPORT
+          : TelegramChatRole.GENERAL,
       isActive: true,
       lastSeenAt: new Date(),
     },
@@ -322,7 +397,11 @@ async function handleSupportReplyCommand(args: string[], message: TelegramMessag
       source: "TELEGRAM",
     });
 
-    return "Reply saved for ticket " + ticketId + ". The user can see it in Conviction Support and app notifications.";
+    return (
+      "Reply saved for ticket " +
+      ticketId +
+      ". The user can see it in Conviction Support and app notifications."
+    );
   } catch {
     return "Ticket not found. Check the ticket id and try again.";
   }
@@ -336,7 +415,10 @@ async function handleSupportResolveCommand(args: string[], message: TelegramMess
     return "Resolve format: /resolve <ticketId> Optional subject | Optional closing note";
   }
 
-  const parsed = parseSupportMail(rest || "Ticket resolved | This ticket has been marked resolved. Reply from the Support page if you still need help.");
+  const parsed = parseSupportMail(
+    rest ||
+      "Ticket resolved | This ticket has been marked resolved. Reply from the Support page if you still need help.",
+  );
 
   try {
     await resolveSupportTicket(ticketId, {
@@ -345,14 +427,235 @@ async function handleSupportResolveCommand(args: string[], message: TelegramMess
       body: parsed.body,
     });
 
-    return "Ticket " + ticketId + " marked resolved. It will auto-close after 3 days unless the user replies.";
+    return (
+      "Ticket " +
+      ticketId +
+      " marked resolved. It will auto-close after 3 days unless the user replies."
+    );
   } catch {
     return "Ticket not found. Check the ticket id and try again.";
   }
 }
 
+async function handleOmnistonQuoteCommand(args: string[], message: TelegramMessage) {
+  const [fromAsset, toAsset, amountUnits] = args;
+
+  if (!fromAsset || !toAsset || !amountUnits) {
+    return [
+      "Usage: /quote <from> <to> <amountUnits>",
+      "Examples:",
+      "/quote TON USDT 1000000000",
+      "/quote USDT STON 1000000",
+      "Amounts are base units, not display decimals.",
+    ].join("\n");
+  }
+
+  if (!integerUnitsPattern.test(amountUnits) || BigInt(amountUnits) <= 0n) {
+    return "Amount must be positive integer base units, for example 1000000.";
+  }
+
+  const quoteService = new OmnistonQuoteService(env.omniston);
+
+  try {
+    const result = await quoteService.requestQuote({ fromAsset, toAsset, amountUnits });
+    await recordTelegramQuoteEvent(message, {
+      fromAsset,
+      toAsset,
+      amountUnits,
+      status: OmnistonQuoteStatus.QUOTED,
+      inputUnits: result.quote.inputUnits,
+      outputUnits: result.quote.outputUnits,
+      settlement: result.settlement,
+      resolverName: result.quote.resolverName,
+      quoteId: result.quote.quoteId,
+      gasBudget: result.quote.gasBudget ?? null,
+      routeCount:
+        result.quote.settlementData.$case === "swap"
+          ? result.quote.settlementData.value.routes.length
+          : null,
+    });
+
+    return formatOmnistonQuote(result);
+  } catch (error) {
+    await recordTelegramQuoteEvent(message, {
+      fromAsset,
+      toAsset,
+      amountUnits,
+      ...omnistonQuoteErrorFields(error),
+    });
+
+    return omnistonQuoteErrorMessage(error);
+  }
+}
+
+type TelegramQuoteEventInput = {
+  fromAsset: string;
+  toAsset: string;
+  amountUnits: string;
+  status: OmnistonQuoteStatus;
+  inputUnits?: string | null;
+  outputUnits?: string | null;
+  settlement?: string | null;
+  resolverName?: string | null;
+  quoteId?: string | null;
+  gasBudget?: string | null;
+  routeCount?: number | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+};
+
+async function recordTelegramQuoteEvent(message: TelegramMessage, input: TelegramQuoteEventInput) {
+  try {
+    await recordOmnistonQuoteEvent({
+      platformUserId: message.from?.id ? String(message.from.id) : null,
+      username: message.from?.username ?? null,
+      source: "CORE_TELEGRAM_WEBHOOK",
+      ...input,
+    });
+  } catch (error) {
+    console.error("[telegram] could not record Omniston quote event", error);
+  }
+}
+
+function omnistonQuoteStatusMessage() {
+  return [
+    "Omniston quote status",
+    "Enabled: " + (env.omniston.enabled ? "yes" : "no"),
+    "Network: " + env.omniston.network,
+    "Routing mode: " + env.omniston.routingMode,
+    "API: " + env.omniston.apiUrl,
+    "Timeout: " + env.omniston.quoteTimeoutMs + "ms",
+    "Quote command: " +
+      (env.omniston.enabled && env.omniston.routingMode === "quote_only" ? "ready" : "disabled"),
+  ].join("\n");
+}
+
+function formatOmnistonQuote(result: OmnistonQuoteResult) {
+  const { quote } = result;
+  const lines = [
+    "Omniston quote",
+    result.inputSymbol + " -> " + result.outputSymbol,
+    "Input: " + formatQuoteAmount(quote.inputUnits, result.inputSymbol),
+    "Estimated output: " + formatQuoteAmount(quote.outputUnits, result.outputSymbol),
+    "Settlement: " + result.settlement,
+    "Resolver: " + quote.resolverName,
+    "Quote ID: " + quote.quoteId,
+  ];
+
+  if (quote.gasBudget) {
+    lines.push("Gas budget: " + quote.gasBudget);
+  }
+
+  if (quote.settlementData.$case === "swap") {
+    lines.push("Routes: " + quote.settlementData.value.routes.length);
+    lines.push(
+      "Recommended min output: " +
+        formatQuoteAmount(
+          quote.settlementData.value.recommendedMinOutputAmount,
+          result.outputSymbol,
+        ),
+    );
+  }
+
+  lines.push(
+    "",
+    "Quote only. No wallet transaction was built or submitted.",
+    "https://convictionmarkets.xyz",
+  );
+
+  return lines.join("\n");
+}
+
+const integerUnitsPattern = /^(?:0|[1-9]\d*)$/;
+
+const quoteAssetDecimals: Record<string, number> = {
+  STON: 9,
+  TON: 9,
+  USDT: 6,
+};
+
+function formatQuoteAmount(units: string, symbol: string) {
+  const decimals = quoteAssetDecimals[symbol.toUpperCase()];
+
+  if (decimals === undefined) {
+    return units + " units";
+  }
+
+  const value = BigInt(units);
+  const scale = 10n ** BigInt(decimals);
+  const whole = value / scale;
+  const fraction = value % scale;
+  const fractionText = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
+  const displayFraction = fractionText ? "." + fractionText.slice(0, 6) : "";
+
+  return whole.toString() + displayFraction + " " + symbol + " (" + units + " units)";
+}
+
+function omnistonQuoteErrorFields(error: unknown): {
+  status: OmnistonQuoteStatus;
+  errorCode: string;
+  errorMessage: string;
+} {
+  if (error instanceof OmnistonQuoteDisabledError) {
+    return {
+      status: OmnistonQuoteStatus.DISABLED,
+      errorCode: "OMNISTON_DISABLED",
+      errorMessage: error.message,
+    };
+  }
+
+  if (error instanceof OmnistonNoQuoteError) {
+    return {
+      status: OmnistonQuoteStatus.NO_QUOTE,
+      errorCode: "OMNISTON_NO_QUOTE",
+      errorMessage: error.message,
+    };
+  }
+
+  if (error instanceof OmnistonQuoteTimeoutError) {
+    return {
+      status: OmnistonQuoteStatus.TIMEOUT,
+      errorCode: "OMNISTON_TIMEOUT",
+      errorMessage: error.message,
+    };
+  }
+
+  if (error instanceof OmnistonQuoteInputError) {
+    return {
+      status: OmnistonQuoteStatus.FAILED,
+      errorCode: "OMNISTON_INPUT_ERROR",
+      errorMessage: error.message,
+    };
+  }
+
+  return {
+    status: OmnistonQuoteStatus.FAILED,
+    errorCode: error instanceof Error ? error.name : "OMNISTON_UNKNOWN_ERROR",
+    errorMessage: error instanceof Error ? error.message : "Unknown quote error.",
+  };
+}
+
+function omnistonQuoteErrorMessage(error: unknown) {
+  if (error instanceof OmnistonQuoteDisabledError) {
+    return "Omniston quotes are disabled on this deployment. Set OMNISTON_ENABLED=true and OMNISTON_ROUTING_MODE=quote_only to test quotes.";
+  }
+
+  if (error instanceof OmnistonQuoteInputError) {
+    return error.message;
+  }
+
+  if (error instanceof OmnistonNoQuoteError || error instanceof OmnistonQuoteTimeoutError) {
+    return error.message;
+  }
+
+  console.error(error);
+  return "I could not fetch an Omniston quote right now. Please try again later.";
+}
+
 async function buildTelegramAiAnswer(question: string, message: TelegramMessage) {
-  const author = message.from?.username ? "@" + message.from.username : message.from?.first_name ?? "Telegram user";
+  const author = message.from?.username
+    ? "@" + message.from.username
+    : (message.from?.first_name ?? "Telegram user");
   const result = await createSupportAnswer({
     question,
     pageContext: "Telegram group question from " + author,
@@ -390,10 +693,7 @@ async function buildMarketDigest() {
     ...markets.map((market, index) => {
       const yes = formatPercent(market.lastTradePrice ?? market.bestAsk ?? market.bestBid);
       const tag = market.providerMetadata.primaryTag ?? market.category ?? "Market";
-      return [
-        String(index + 1) + ". " + market.title,
-        "YES " + yes + " | " + tag,
-      ].join("\n");
+      return [String(index + 1) + ". " + market.title, "YES " + yes + " | " + tag].join("\n");
     }),
     "Open: https://convictionmarkets.xyz/markets",
   ].join("\n\n");
@@ -403,15 +703,18 @@ async function sendTelegramMessage(chatId: string, text: string) {
   if (!env.telegramBotToken) return false;
 
   try {
-    const response = await fetch("https://api.telegram.org/bot" + env.telegramBotToken + "/sendMessage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        disable_web_page_preview: true,
-        text: truncateTelegramText(text),
-      }),
-    });
+    const response = await fetch(
+      "https://api.telegram.org/bot" + env.telegramBotToken + "/sendMessage",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          disable_web_page_preview: true,
+          text: truncateTelegramText(text),
+        }),
+      },
+    );
 
     return response.ok;
   } catch {
@@ -453,6 +756,8 @@ function helpMessage(role: TelegramChatRole) {
       "/reply <ticketId> Subject | Solution body - send a reply into the user support thread",
       "/resolve <ticketId> Subject | Closing note - mark a ticket resolved",
       "/markets - show a live market digest",
+      "/quote <from> <to> <amountUnits> - get a quote-only TON route",
+      "/quote_status - show Omniston quote mode",
       "/aistatus - test the core AI provider connection",
       "Support mail: " + supportEmail,
     ].join("\n");
@@ -464,6 +769,8 @@ function helpMessage(role: TelegramChatRole) {
       "/ai <question> - ask Conviction AI",
       "/ai: <question> - ask Conviction AI",
       "/markets - show a live market digest",
+      "/quote <from> <to> <amountUnits> - get a quote-only TON route",
+      "/quote_status - show Omniston quote mode",
       "/aistatus - test the core AI provider connection",
       "/role general - stop scheduled market digests",
       "/status - show community bot status",
@@ -475,6 +782,8 @@ function helpMessage(role: TelegramChatRole) {
     "/ai <question> - ask Conviction AI",
     "/ai: <question> - ask Conviction AI",
     "/markets - show a live market digest",
+    "/quote <from> <to> <amountUnits> - get a quote-only TON route",
+    "/quote_status - show Omniston quote mode",
     "/aistatus - test the core AI provider connection",
     "/role alerts - receive scheduled market digests",
     "/status - show community bot status",
@@ -516,7 +825,11 @@ function chatIdMessage(chatId: number, role: TelegramChatRole) {
     return "Chat id: " + chatId + "\nThis support group is registered for ticket alerts.";
   }
 
-  return "Chat id: " + chatId + "\nAdmins can use /role alerts for market updates or /role general for community AI only.";
+  return (
+    "Chat id: " +
+    chatId +
+    "\nAdmins can use /role alerts for market updates or /role general for community AI only."
+  );
 }
 
 async function isTelegramAdmin(chatId: number, user: TelegramUser | undefined) {
@@ -525,11 +838,14 @@ async function isTelegramAdmin(chatId: number, user: TelegramUser | undefined) {
   if (!userId) return false;
 
   try {
-    const response = await fetch("https://api.telegram.org/bot" + env.telegramBotToken + "/getChatMember", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, user_id: userId }),
-    });
+    const response = await fetch(
+      "https://api.telegram.org/bot" + env.telegramBotToken + "/getChatMember",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, user_id: userId }),
+      },
+    );
     const body = (await response.json()) as TelegramChatMemberResponse;
     const status = body.result?.status;
     return body.ok === true && (status === "creator" || status === "administrator");
@@ -547,5 +863,7 @@ function parseSupportMail(value: string) {
 }
 
 function telegramAuthorName(message: TelegramMessage) {
-  return message.from?.username ? "@" + message.from.username : message.from?.first_name ?? "Conviction Support";
+  return message.from?.username
+    ? "@" + message.from.username
+    : (message.from?.first_name ?? "Conviction Support");
 }

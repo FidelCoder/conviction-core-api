@@ -18,6 +18,17 @@ const optionalPrivateKey = z.preprocess(
     .optional(),
 );
 
+const optionalBoolean = z.preprocess((value) => {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return undefined;
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+
+  return value;
+}, z.boolean().default(false));
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().min(1).default("0.0.0.0"),
@@ -33,10 +44,7 @@ const envSchema = z.object({
   CONVICTION_EXECUTION_MODE: z.enum(["disabled", "testnet", "polymarket"]).default("disabled"),
   CONVICTION_EXECUTION_SIGNER_PRIVATE_KEY: optionalPrivateKey,
   BASE_SEPOLIA_RPC_URL: z.string().url().default("https://sepolia.base.org"),
-  ETHEREUM_SEPOLIA_RPC_URL: z
-    .string()
-    .url()
-    .default("https://ethereum-sepolia-rpc.publicnode.com"),
+  ETHEREUM_SEPOLIA_RPC_URL: z.string().url().default("https://ethereum-sepolia-rpc.publicnode.com"),
   ARBITRUM_SEPOLIA_RPC_URL: z.string().url().default("https://sepolia-rollup.arbitrum.io/rpc"),
   POLYMARKET_CLOB_API_URL: z.string().url().default("https://clob.polymarket.com"),
   POLYMARKET_CLOB_API_KEY: z.string().min(1).optional(),
@@ -51,6 +59,11 @@ const envSchema = z.object({
   OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   OPENAI_SUPPORT_MODEL: z.string().min(1).default("gpt-5.5"),
   OPENAI_MODEL: z.string().min(1).optional(),
+  OMNISTON_ENABLED: optionalBoolean,
+  OMNISTON_NETWORK: z.enum(["mainnet", "testnet"]).default("mainnet"),
+  OMNISTON_ROUTING_MODE: z.enum(["disabled", "quote_only", "swap_intent"]).default("disabled"),
+  OMNISTON_API_URL: z.string().url().optional(),
+  OMNISTON_QUOTE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -90,5 +103,17 @@ export const env = {
   corePublicUrl: parsedEnv.data.CORE_PUBLIC_URL ?? null,
   openAiApiKey: parsedEnv.data.OPENAI_API_KEY ?? null,
   openAiBaseUrl: parsedEnv.data.OPENAI_BASE_URL,
-  openAiSupportModel: parsedEnv.data.OPENAI_SUPPORT_MODEL ?? parsedEnv.data.OPENAI_MODEL ?? "gpt-5.5",
+  openAiSupportModel:
+    parsedEnv.data.OPENAI_SUPPORT_MODEL ?? parsedEnv.data.OPENAI_MODEL ?? "gpt-5.5",
+  omniston: {
+    enabled: parsedEnv.data.OMNISTON_ENABLED,
+    network: parsedEnv.data.OMNISTON_NETWORK,
+    routingMode: parsedEnv.data.OMNISTON_ROUTING_MODE,
+    apiUrl:
+      parsedEnv.data.OMNISTON_API_URL ??
+      (parsedEnv.data.OMNISTON_NETWORK === "testnet"
+        ? "wss://omni-ws-sandbox.ston.fi"
+        : "wss://omni-ws.ston.fi"),
+    quoteTimeoutMs: parsedEnv.data.OMNISTON_QUOTE_TIMEOUT_MS,
+  },
 };

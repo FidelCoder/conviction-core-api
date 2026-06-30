@@ -38,12 +38,14 @@
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
+    "@ston-fi/omniston-sdk": "0.8.3",
     "dotenv": "16.4.7",
     "fastify": "5.8.5",
     "viem": "^2.53.1",
     "zod": "3.25.76"
   },
   "overrides": {
-    "fast-uri": "3.1.2"
+    "fast-uri": "3.1.2",
+    "ws": "8.21.0"
   }
 }
