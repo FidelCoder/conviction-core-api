@@ -126,6 +126,15 @@ enum ContractTransactionType {
   LIQUIDATION
 }
 
+enum OmnistonQuoteStatus {
+  REQUESTED
+  QUOTED
+  NO_QUOTE
+  FAILED
+  TIMEOUT
+  DISABLED
+}
+
 model User {
   id                   String                @id @default(auto()) @map("_id") @db.ObjectId
   displayName          String?
@@ -154,6 +163,7 @@ model User {
   supportTickets       SupportTicket[]
   supportReplies       SupportTicketReply[]
   activityMediaItems   ActivityMediaItem[]
+  omnistonQuoteEvents  OmnistonQuoteEvent[]
 }
 
 model SocialAccount {
@@ -584,6 +594,40 @@ model ActivityMediaItem {
   @@index([marketId])
   @@index([kind])
   @@index([status])
+  @@index([createdAt])
+}
+
+model OmnistonQuoteEvent {
+  id               String              @id @default(auto()) @map("_id") @db.ObjectId
+  userId           String?             @db.ObjectId
+  platform         SocialPlatform      @default(TELEGRAM)
+  platformUserId   String?
+  username         String?
+  source           String              @default("TELEGRAM_BOT")
+  fromAsset        String
+  toAsset          String
+  amountUnits      String
+  status           OmnistonQuoteStatus
+  inputUnits       String?
+  outputUnits      String?
+  settlement       String?
+  resolverName     String?
+  quoteId          String?
+  gasBudget        String?
+  routeCount       Int?
+  errorCode        String?
+  errorMessage     String?
+  metadata         Json?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  user             User?               @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@index([userId])
+  @@index([platform])
+  @@index([platformUserId])
+  @@index([status])
+  @@index([fromAsset])
+  @@index([toAsset])
   @@index([createdAt])
 }
 

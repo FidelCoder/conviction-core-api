@@ -113,6 +113,42 @@ If Vercel returns an authentication page, disable deployment protection for the 
 - `GET /positions/:positionId/copy-trades` returns copy intents for one source position.
 - `GET /leaderboard` returns trader stats calculated from real database records.
 - `GET /trader-profiles/:id/stats` returns stats for one trader profile.
+- `POST /omniston/quote-events` records a quote-only Omniston attempt from Telegram or another client.
+- `GET /omniston/quote-events` returns recent Omniston quote attempts.
+- `GET /omniston/quote-summary` returns quote totals, unique Telegram users, status counts, top pairs, and recent events.
+
+## Omniston Quote Metrics
+
+The core API records quote-only Omniston usage from Telegram. This is analytics and grant reporting infrastructure; it does not build, sign, or submit swaps.
+
+Record a quote result from a client:
+
+```sh
+curl -X POST http://localhost:3000/omniston/quote-events \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "platform": "TELEGRAM",
+    "platformUserId": "7121972391",
+    "username": "OXbeach",
+    "fromAsset": "TON",
+    "toAsset": "USDT",
+    "amountUnits": "1000000000",
+    "status": "QUOTED",
+    "inputUnits": "1000000000",
+    "outputUnits": "3500000",
+    "settlement": "swap",
+    "resolverName": "example-resolver"
+  }'
+```
+
+Read recent events and summary metrics:
+
+```sh
+curl http://localhost:3000/omniston/quote-events?limit=20
+curl http://localhost:3000/omniston/quote-summary
+```
+
+Statuses are `REQUESTED`, `QUOTED`, `NO_QUOTE`, `FAILED`, `TIMEOUT`, and `DISABLED`. Telegram records terminal statuses for accepted `/quote` attempts so totals map cleanly to user quote activity.
 
 ## Market Data
 
