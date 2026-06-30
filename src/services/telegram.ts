@@ -62,6 +62,7 @@ type SupportTicketAlert = {
 };
 
 const supportEmail = "convictionsmarket@gmail.com";
+const miniAppUrl = "https://convictionmarkets.xyz/telegram";
 
 const roleAliases: Record<string, TelegramChatRole> = {
   support: TelegramChatRole.SUPPORT,
@@ -119,7 +120,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
       : rawArgs;
 
   if (command === "/start") {
-    await sendTelegramMessage(String(chat.id), startMessage(chat.id));
+    await sendTelegramMessage(String(chat.id), startMessage(chat.id), miniAppKeyboard());
     return { handled: true, command };
   }
 
@@ -128,6 +129,7 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     await sendTelegramMessage(
       String(chat.id),
       helpMessage(stored?.role ?? TelegramChatRole.GENERAL),
+      miniAppKeyboard(),
     );
     return { handled: true, command };
   }
@@ -203,6 +205,11 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
     return { handled: true, command };
   }
 
+  if (command === "/app" || command === "/miniapp") {
+    await sendTelegramMessage(String(chat.id), miniAppMessage(), miniAppKeyboard());
+    return { handled: true, command };
+  }
+
   if (command === "/execution_status") {
     await sendTelegramMessage(String(chat.id), await executionStatusMessage());
     return { handled: true, command };
@@ -252,7 +259,9 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
         "Role: " + roleLabel(stored?.role ?? TelegramChatRole.GENERAL),
         "Support alerts: " +
           (env.telegramSupportChatId ? "configured" : "missing TELEGRAM_SUPPORT_CHAT_ID"),
+        "Mini app: " + miniAppUrl,
       ].join("\n"),
+      miniAppKeyboard(),
     );
     return { handled: true, command };
   }
@@ -705,7 +714,7 @@ async function buildMarketDigest() {
   ].join("\n\n");
 }
 
-async function sendTelegramMessage(chatId: string, text: string) {
+async function sendTelegramMessage(chatId: string, text: string, replyMarkup?: TelegramReplyMarkup) {
   if (!env.telegramBotToken) return false;
 
   try {
@@ -718,6 +727,7 @@ async function sendTelegramMessage(chatId: string, text: string) {
           chat_id: chatId,
           disable_web_page_preview: true,
           text: truncateTelegramText(text),
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         }),
       },
     );
@@ -726,6 +736,28 @@ async function sendTelegramMessage(chatId: string, text: string) {
   } catch {
     return false;
   }
+}
+
+
+type TelegramReplyMarkup = {
+  inline_keyboard: Array<Array<{ text: string; url?: string; web_app?: { url: string } }>>;
+};
+
+function miniAppKeyboard(): TelegramReplyMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: "Open Conviction Mini App", web_app: { url: miniAppUrl } }],
+      [{ text: "Open in browser", url: miniAppUrl }],
+    ],
+  };
+}
+
+function miniAppMessage() {
+  return [
+    "Conviction Mini App",
+    "Explore markets, preview TON routes with Omniston quote-only mode, follow Pulse, and open margin/vault workflows from Telegram.",
+    "Open: " + miniAppUrl,
+  ].join("\n");
 }
 
 function normalizeTelegramCommandText(value: string) {
@@ -763,6 +795,7 @@ function helpMessage(role: TelegramChatRole) {
       "/resolve <ticketId> Subject | Closing note - mark a ticket resolved",
       "/markets - show a live market digest",
       "/quote <from> <to> <amountUnits> - get a quote-only TON route",
+      "/app - open the Telegram Mini App",
       "/quote_status - show Omniston quote mode",
       "/execution_status - show margin/fill readiness",
       "/aistatus - test the core AI provider connection",
@@ -777,6 +810,7 @@ function helpMessage(role: TelegramChatRole) {
       "/ai: <question> - ask Conviction AI",
       "/markets - show a live market digest",
       "/quote <from> <to> <amountUnits> - get a quote-only TON route",
+      "/app - open the Telegram Mini App",
       "/quote_status - show Omniston quote mode",
       "/execution_status - show margin/fill readiness",
       "/aistatus - test the core AI provider connection",
@@ -791,6 +825,7 @@ function helpMessage(role: TelegramChatRole) {
     "/ai: <question> - ask Conviction AI",
     "/markets - show a live market digest",
     "/quote <from> <to> <amountUnits> - get a quote-only TON route",
+    "/app - open the Telegram Mini App",
     "/quote_status - show Omniston quote mode",
     "/execution_status - show margin/fill readiness",
     "/aistatus - test the core AI provider connection",
