@@ -116,6 +116,109 @@ export async function getExecutionCapabilities() {
   };
 }
 
+export async function getExecutionReadiness() {
+  const capabilities = await getExecutionCapabilities();
+  const adapterRuntime = getAdapterRuntime();
+  const testnetChains = capabilities.chains.filter((chain) => chain.network === "testnet");
+  const walletFlowChains = testnetChains.filter(
+    (chain) => chain.walletFlowEnabled && chain.vaultAddress && chain.collateralTokenAddress,
+  );
+  const missing: string[] = [];
+
+  if (walletFlowChains.length === 0) {
+    missing.push("No testnet chain has both an active vault and collateral token configured.");
+  }
+
+  if (env.convictionExecutionMode === "disabled") {
+    missing.push("CONVICTION_EXECUTION_MODE is disabled.");
+  }
+
+  if (env.convictionExecutionMode === "testnet" && !env.convictionExecutionSignerPrivateKey) {
+    missing.push("CONVICTION_EXECUTION_SIGNER_PRIVATE_KEY is missing.");
+  }
+
+  if (env.convictionExecutionMode === "polymarket") {
+    if (!env.polymarketClobApiKey) missing.push("POLYMARKET_CLOB_API_KEY is missing.");
+    if (!env.polymarketClobApiSecret) missing.push("POLYMARKET_CLOB_API_SECRET is missing.");
+    if (!env.polymarketClobApiPassphrase)
+      missing.push("POLYMARKET_CLOB_API_PASSPHRASE is missing.");
+    if (!env.polymarketClobFunderAddress)
+      missing.push("POLYMARKET_CLOB_FUNDER_ADDRESS is missing.");
+    missing.push(
+      "Mainnet collateral custody and venue settlement rails are not enabled in this API.",
+    );
+  }
+
+  const stages = [
+    {
+      id: "market_intent",
+      label: "Create market margin intent",
+      ready: true,
+      testEndpoint: "POST /positions",
+      note: "Creates a persisted user intent. It is not a market fill.",
+    },
+    {
+      id: "wallet_approval",
+      label: "Prepare collateral approval",
+      ready: walletFlowChains.length > 0,
+      testEndpoint: "POST /contracts/collateral-approvals/prepare",
+      note: "Returns wallet call data for ERC20 approval.",
+    },
+    {
+      id: "vault_deposit",
+      label: "Prepare vault deposit",
+      ready: walletFlowChains.length > 0,
+      testEndpoint: "POST /contracts/deposits/prepare",
+      note: "Returns wallet call data for vault deposit.",
+    },
+    {
+      id: "vault_margin_intent",
+      label: "Prepare vault margin intent",
+      ready: walletFlowChains.length > 0,
+      testEndpoint: "POST /contracts/margin-intents/prepare",
+      note: "Returns wallet call data for createMarginIntent.",
+    },
+    {
+      id: "transaction_tracking",
+      label: "Record wallet transaction hashes",
+      ready: true,
+      testEndpoint: "PATCH /contracts/transactions/:id",
+      note: "Tracks submitted/confirmed wallet hashes. It does not by itself execute a market fill.",
+    },
+    {
+      id: "adapter_settlement",
+      label: "Settle adapter execution",
+      ready: adapterRuntime.ready,
+      testEndpoint: "POST /execution/positions/:positionId/settle",
+      note: adapterRuntime.message,
+    },
+  ];
+
+  return {
+    status: adapterRuntime.ready
+      ? "ADAPTER_READY"
+      : walletFlowChains.length > 0
+        ? "WALLET_FLOW_READY"
+        : "BLOCKED",
+    canCreateMarginIntent: true,
+    canPrepareWalletTransactions: walletFlowChains.length > 0,
+    canSettleAdapterExecution: adapterRuntime.ready,
+    canClaimRealMarketFill: adapterRuntime.ready && env.convictionExecutionMode === "testnet",
+    productionVenueFillEnabled: false,
+    adapter: {
+      id: adapterRuntime.adapterId,
+      code: adapterRuntime.code,
+      ready: adapterRuntime.ready,
+      message: adapterRuntime.message,
+    },
+    missing,
+    stages,
+    supportedChains: capabilities.chains,
+    warning:
+      "A Conviction position should only show EXECUTED after adapter settlement confirms. Wallet approval, deposit, and margin intent transactions are testable, but they are not Polymarket venue fills.",
+  };
+}
+
 export function isSupportedExecutionIntentChain(chainId: number) {
   return supportedIntentChains.some((chain) => chain.chainId === chainId);
 }
@@ -234,11 +337,13 @@ async function executeTestnetVaultAdapter(position: PositionWithMarket, adapterI
     });
   }
 
-  if (!position.chainTransactionHash || !transactionHashPattern.test(position.chainTransactionHash)) {
+  if (
+    !position.chainTransactionHash ||
+    !transactionHashPattern.test(position.chainTransactionHash)
+  ) {
     return createPendingAttempt(position, {
       code: "AWAITING_MARGIN_INTENT_TRANSACTION",
-      message:
-        "The position does not have a confirmed vault margin-intent transaction hash yet.",
+      message: "The position does not have a confirmed vault margin-intent transaction hash yet.",
     });
   }
 
@@ -342,7 +447,9 @@ async function executeTestnetVaultAdapter(position: PositionWithMarket, adapterI
     transport: http(chainRuntime.rpcUrl),
   });
   const externalRef = buildReferenceBytes("conviction:testnet:submit:" + position.id);
-  const executionRef = buildReferenceBytes("conviction:testnet:fill:" + position.id + ":" + fill.price);
+  const executionRef = buildReferenceBytes(
+    "conviction:testnet:fill:" + position.id + ":" + fill.price,
+  );
   let submitHash: Hex;
 
   try {
@@ -418,7 +525,11 @@ async function executeTestnetVaultAdapter(position: PositionWithMarket, adapterI
       await markAttemptFailed(attempt.id, {
         code: "ADAPTER_CONFIRM_FAILED",
         message: "The adapter confirm transaction failed onchain.",
-        responsePayload: { confirmHash, confirmReceipt: summarizeReceipt(confirmReceipt), submitHash },
+        responsePayload: {
+          confirmHash,
+          confirmReceipt: summarizeReceipt(confirmReceipt),
+          submitHash,
+        },
       }),
     );
   }
@@ -476,7 +587,9 @@ function getAdapterRuntime() {
 
     return {
       adapterId: POLYMARKET_ADAPTER_ID,
-      code: hasCredentials ? "POLYMARKET_ADAPTER_NEEDS_MAINNET_RAILS" : "POLYMARKET_CREDENTIALS_MISSING",
+      code: hasCredentials
+        ? "POLYMARKET_ADAPTER_NEEDS_MAINNET_RAILS"
+        : "POLYMARKET_CREDENTIALS_MISSING",
       message: hasCredentials
         ? "Polymarket CLOB credentials are configured, but production market fills still require mainnet collateral custody and venue settlement rails."
         : "Polymarket CLOB credentials are missing. Configure API key, secret, passphrase, and funder before production venue fills.",
@@ -503,10 +616,7 @@ function getAdapterRuntime() {
   };
 }
 
-async function createPendingAttempt(
-  position: Position,
-  detail: { code: string; message: string },
-) {
+async function createPendingAttempt(position: Position, detail: { code: string; message: string }) {
   const executionAttempt = await prisma.executionAttempt.create({
     data: buildAttemptData(position, {
       adapterId: "AWAITING_WALLET_TRANSACTION",
@@ -523,10 +633,7 @@ async function createPendingAttempt(
   return normalizeExecutionAttempt(executionAttempt);
 }
 
-async function createBlockedAttempt(
-  position: Position,
-  detail: { code: string; message: string },
-) {
+async function createBlockedAttempt(position: Position, detail: { code: string; message: string }) {
   const adapterRuntime = getAdapterRuntime();
   const executionAttempt = await prisma.executionAttempt.create({
     data: buildAttemptData(position, {
@@ -580,10 +687,7 @@ function buildAttemptData(
   };
 }
 
-async function markAttemptBlocked(
-  attemptId: string,
-  detail: { code: string; message: string },
-) {
+async function markAttemptBlocked(attemptId: string, detail: { code: string; message: string }) {
   return prisma.executionAttempt.update({
     where: { id: attemptId },
     data: {
@@ -679,7 +783,10 @@ function parseMarginIntentCreatedLog(logs: Log[], vaultAddress: string): ParsedM
 }
 
 function validateParsedIntent(position: PositionWithMarket, intent: ParsedMarginIntent) {
-  if (position.walletAddress && intent.account.toLowerCase() !== position.walletAddress.toLowerCase()) {
+  if (
+    position.walletAddress &&
+    intent.account.toLowerCase() !== position.walletAddress.toLowerCase()
+  ) {
     throw new AppError("Margin intent wallet does not match the position wallet", {
       code: "MARGIN_INTENT_WALLET_MISMATCH",
       statusCode: 409,

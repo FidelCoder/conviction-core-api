@@ -2,6 +2,7 @@ import { OmnistonQuoteStatus, TelegramChatRole } from "@prisma/client";
 
 import { env } from "../config/index.js";
 import { prisma } from "../lib/prisma.js";
+import { getExecutionReadiness } from "./execution.js";
 import { listMarkets } from "./markets.js";
 import { recordOmnistonQuoteEvent } from "./omniston-quotes.js";
 import {
@@ -199,6 +200,11 @@ export async function handleTelegramUpdate(update: TelegramUpdate) {
 
   if (command === "/quote") {
     await sendTelegramMessage(String(chat.id), await handleOmnistonQuoteCommand(args, message));
+    return { handled: true, command };
+  }
+
+  if (command === "/execution_status") {
+    await sendTelegramMessage(String(chat.id), await executionStatusMessage());
     return { handled: true, command };
   }
 
@@ -758,6 +764,7 @@ function helpMessage(role: TelegramChatRole) {
       "/markets - show a live market digest",
       "/quote <from> <to> <amountUnits> - get a quote-only TON route",
       "/quote_status - show Omniston quote mode",
+      "/execution_status - show margin/fill readiness",
       "/aistatus - test the core AI provider connection",
       "Support mail: " + supportEmail,
     ].join("\n");
@@ -771,6 +778,7 @@ function helpMessage(role: TelegramChatRole) {
       "/markets - show a live market digest",
       "/quote <from> <to> <amountUnits> - get a quote-only TON route",
       "/quote_status - show Omniston quote mode",
+      "/execution_status - show margin/fill readiness",
       "/aistatus - test the core AI provider connection",
       "/role general - stop scheduled market digests",
       "/status - show community bot status",
@@ -784,10 +792,33 @@ function helpMessage(role: TelegramChatRole) {
     "/markets - show a live market digest",
     "/quote <from> <to> <amountUnits> - get a quote-only TON route",
     "/quote_status - show Omniston quote mode",
+    "/execution_status - show margin/fill readiness",
     "/aistatus - test the core AI provider connection",
     "/role alerts - receive scheduled market digests",
     "/status - show community bot status",
   ].join("\n");
+}
+
+async function executionStatusMessage() {
+  const readiness = await getExecutionReadiness();
+  const readyStages = readiness.stages.filter((stage) => stage.ready).length;
+  const totalStages = readiness.stages.length;
+  const missing = readiness.missing.slice(0, 4);
+
+  return [
+    "Conviction execution status",
+    "Status: " + readiness.status,
+    "Wallet flow: " + (readiness.canPrepareWalletTransactions ? "ready" : "blocked"),
+    "Adapter settlement: " + (readiness.canSettleAdapterExecution ? "ready" : "blocked"),
+    "Production venue fills: " + (readiness.productionVenueFillEnabled ? "ready" : "disabled"),
+    "Ready stages: " + readyStages + "/" + totalStages,
+    "Adapter: " + readiness.adapter.code,
+    readiness.adapter.message,
+    missing.length ? "Missing: " + missing.join(" | ") : null,
+    "HTTP: https://conviction-core-api.vercel.app/execution/readiness",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function aiStatusMessage(status: Awaited<ReturnType<typeof checkSupportAiProvider>>) {

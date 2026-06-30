@@ -27,6 +27,26 @@ export type OmnistonQuoteResult = {
   settlement: "swap" | "order";
 };
 
+export function getOmnistonQuoteStatus(config: OmnistonQuoteConfig) {
+  const quoteReady = config.enabled && config.routingMode === "quote_only";
+  return {
+    enabled: config.enabled,
+    network: config.network,
+    routingMode: config.routingMode,
+    apiUrl: config.apiUrl,
+    quoteTimeoutMs: config.quoteTimeoutMs,
+    quoteReady,
+    swapSubmissionEnabled: false,
+    status: quoteReady ? "QUOTE_ONLY_READY" : "DISABLED",
+    notes: [
+      quoteReady
+        ? "Quote-only routing is ready. The bot can request Omniston quotes."
+        : "Set OMNISTON_ENABLED=true and OMNISTON_ROUTING_MODE=quote_only, then redeploy core.",
+      "This path never builds, signs, or submits wallet transactions.",
+    ],
+  };
+}
+
 export class OmnistonQuoteService {
   constructor(private readonly config: OmnistonQuoteConfig) {}
 
