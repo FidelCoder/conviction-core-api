@@ -59,9 +59,9 @@ const envSchema = z.object({
   OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   OPENAI_SUPPORT_MODEL: z.string().min(1).default("gpt-5.5"),
   OPENAI_MODEL: z.string().min(1).optional(),
-  OMNISTON_ENABLED: optionalBoolean,
+  OMNISTON_ENABLED: optionalBoolean.default(true),
   OMNISTON_NETWORK: z.enum(["mainnet", "testnet"]).default("mainnet"),
-  OMNISTON_ROUTING_MODE: z.enum(["disabled", "quote_only", "swap_intent"]).default("disabled"),
+  OMNISTON_ROUTING_MODE: z.enum(["disabled", "quote_only", "swap_intent"]).default("quote_only"),
   OMNISTON_API_URL: z.string().url().optional(),
   OMNISTON_QUOTE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
 });
