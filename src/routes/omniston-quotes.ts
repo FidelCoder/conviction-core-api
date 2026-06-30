@@ -1,12 +1,14 @@
 import { OmnistonQuoteStatus, Prisma, SocialPlatform } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 
+import { env } from "../config/index.js";
 import { sendSuccess } from "../lib/responses.js";
 import {
   getOmnistonQuoteSummary,
   listOmnistonQuoteEvents,
   recordOmnistonQuoteEvent,
 } from "../services/omniston-quotes.js";
+import { getOmnistonQuoteStatus } from "../services/omniston-quote-service.js";
 
 type CreateOmnistonQuoteEventBody = {
   userId?: string | null;
@@ -106,5 +108,9 @@ export async function registerOmnistonQuoteRoutes(app: FastifyInstance) {
     const summary = await getOmnistonQuoteSummary();
 
     return sendSuccess(reply, { summary });
+  });
+
+  app.get("/omniston/quote-status", async (_request, reply) => {
+    return sendSuccess(reply, { omniston: getOmnistonQuoteStatus(env.omniston) });
   });
 }
