@@ -755,7 +755,7 @@ function miniAppKeyboard(): TelegramReplyMarkup {
 function miniAppMessage() {
   return [
     "Conviction Mini App",
-    "Explore markets, preview TON routes with Omniston quote-only mode, follow Pulse, and open margin/vault workflows from Telegram.",
+    "Explore markets, follow Pulse, request margin, and prepare TON vault liquidity from Telegram.",
     "Open: " + miniAppUrl,
   ].join("\n");
 }
