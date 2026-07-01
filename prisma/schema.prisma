@@ -164,6 +164,7 @@ model User {
   supportReplies       SupportTicketReply[]
   activityMediaItems   ActivityMediaItem[]
   omnistonQuoteEvents  OmnistonQuoteEvent[]
+  tonVaultIntents      TonVaultIntent[]
 }
 
 model SocialAccount {
@@ -645,6 +646,27 @@ model TelegramChat {
   @@index([role])
   @@index([isActive])
   @@index([lastSeenAt])
+}
+
+model TonVaultIntent {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String?  @db.ObjectId
+  telegramUserId String?
+  tonAddress     String
+  asset          String
+  amount         String
+  status         String   @default("REQUESTED")
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User?    @relation(fields: [userId], references: [id], onDelete: NoAction)
+
+  @@index([userId])
+  @@index([telegramUserId])
+  @@index([tonAddress])
+  @@index([asset])
+  @@index([status])
+  @@index([createdAt])
 }
 
 model SupportTicket {
