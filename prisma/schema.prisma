@@ -13,6 +13,32 @@ enum SocialPlatform {
   WEB
 }
 
+enum AuthProvider {
+  EVM_EOA
+  THIRDWEB_SMART_WALLET
+  TON_WALLET
+  TELEGRAM
+  FARCASTER
+  UNKNOWN
+}
+
+enum UsageEventType {
+  PAGE_VIEW
+  HEARTBEAT
+  AUTH_CONNECT
+  AUTH_DISCONNECT
+  PROFILE_CLAIM
+  MARKET_VIEW
+  MARKET_OPEN_MARGIN
+  MARGIN_REQUEST
+  VAULT_DEPOSIT
+  PULSE_POST
+  PULSE_SIGNAL
+  PULSE_FOLLOW
+  SUPPORT_OPEN
+  MINIAPP_OPEN
+}
+
 enum MarketSource {
   POLYMARKET
   KALSHI
@@ -141,6 +167,11 @@ model User {
   email                String?
   createdAt            DateTime              @default(now())
   updatedAt            DateTime              @updatedAt
+  firstSeenAt          DateTime?
+  lastSeenAt           DateTime?
+  sessionCount         Int                   @default(0)
+  isInternal           Boolean               @default(false)
+  acquisitionSource    String?
   socialAccounts       SocialAccount[]
   traderProfile        TraderProfile?
   positions            Position[]
@@ -165,6 +196,8 @@ model User {
   activityMediaItems   ActivityMediaItem[]
   omnistonQuoteEvents  OmnistonQuoteEvent[]
   tonVaultIntents      TonVaultIntent[]
+  usageSessions        UsageSession[]
+  usageEvents          UsageEvent[]
 }
 
 model SocialAccount {
@@ -174,12 +207,22 @@ model SocialAccount {
   platformUserId String
   username       String?
   profileUrl     String?
+  authProvider   AuthProvider   @default(UNKNOWN)
+  source         String?
+  metadata       Json?
+  firstSeenAt    DateTime?
+  lastSeenAt     DateTime?
+  sessionCount   Int            @default(0)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   user           User           @relation(fields: [userId], references: [id], onDelete: NoAction)
+  usageSessions  UsageSession[]
+  usageEvents    UsageEvent[]
 
   @@unique([platform, platformUserId])
   @@index([userId])
+  @@index([authProvider])
+  @@index([lastSeenAt])
 }
 
 model TraderProfile {
@@ -595,6 +638,62 @@ model ActivityMediaItem {
   @@index([marketId])
   @@index([kind])
   @@index([status])
+  @@index([createdAt])
+}
+
+model UsageSession {
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  clientSessionId String          @unique
+  userId          String?         @db.ObjectId
+  socialAccountId String?         @db.ObjectId
+  authProvider    AuthProvider    @default(UNKNOWN)
+  source          String          @default("WEB_APP")
+  entryPath       String?
+  currentPath     String?
+  userAgent       String?
+  referrer        String?
+  startedAt       DateTime        @default(now())
+  lastSeenAt      DateTime        @default(now())
+  endedAt         DateTime?
+  durationSeconds Int             @default(0)
+  eventCount      Int             @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  user            User?           @relation(fields: [userId], references: [id], onDelete: NoAction)
+  socialAccount   SocialAccount?  @relation(fields: [socialAccountId], references: [id], onDelete: NoAction)
+  events          UsageEvent[]
+
+  @@index([userId])
+  @@index([socialAccountId])
+  @@index([authProvider])
+  @@index([source])
+  @@index([startedAt])
+  @@index([lastSeenAt])
+}
+
+model UsageEvent {
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  sessionId       String?         @db.ObjectId
+  clientSessionId String
+  userId          String?         @db.ObjectId
+  socialAccountId String?         @db.ObjectId
+  type            UsageEventType
+  area            String
+  path            String?
+  label           String?
+  value           Float?
+  metadata        Json?
+  createdAt       DateTime        @default(now())
+  session         UsageSession?   @relation(fields: [sessionId], references: [id], onDelete: NoAction)
+  user            User?           @relation(fields: [userId], references: [id], onDelete: NoAction)
+  socialAccount   SocialAccount?  @relation(fields: [socialAccountId], references: [id], onDelete: NoAction)
+
+  @@index([sessionId])
+  @@index([clientSessionId])
+  @@index([userId])
+  @@index([socialAccountId])
+  @@index([type])
+  @@index([area])
   @@index([createdAt])
 }
 

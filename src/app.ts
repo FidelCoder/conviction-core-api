@@ -3,6 +3,8 @@ import fastify from "fastify";
 import { env } from "./config/index.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerActivityMediaRoutes } from "./routes/activity-media.js";
+import { registerAdminRoutes } from "./routes/admin.js";
+import { registerAnalyticsRoutes } from "./routes/analytics.js";
 import { registerContractRoutes } from "./routes/contracts.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -30,6 +32,8 @@ export async function buildApp() {
   registerErrorHandler(app);
   void syncDefaultContractDeployments(app);
   await registerHealthRoutes(app);
+  await registerAdminRoutes(app);
+  await registerAnalyticsRoutes(app);
   await registerExecutionRoutes(app);
   await registerContractRoutes(app);
   await registerUserRoutes(app);
