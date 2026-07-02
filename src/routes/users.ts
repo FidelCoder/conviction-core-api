@@ -1,4 +1,4 @@
-import { SocialPlatform } from "@prisma/client";
+import { AuthProvider, SocialPlatform } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 
 import { AppError } from "../lib/errors.js";
@@ -17,6 +17,8 @@ type SocialAccountBody = {
   username?: string | null;
   displayName?: string | null;
   profileUrl?: string | null;
+  authProvider?: AuthProvider | null;
+  source?: string | null;
   metadata?: unknown;
 };
 
@@ -35,9 +37,11 @@ type UsersQuery = {
   limit?: number;
   query?: string;
   viewerUserId?: string;
+  claimedOnly?: boolean;
 };
 
 const platformValues = Object.values(SocialPlatform);
+const authProviderValues = Object.values(AuthProvider);
 
 export async function registerUserRoutes(app: FastifyInstance) {
   app.get<{ Querystring: UsersQuery }>(
@@ -51,6 +55,7 @@ export async function registerUserRoutes(app: FastifyInstance) {
             limit: { type: "integer", minimum: 1, maximum: 100 },
             query: { type: "string", minLength: 1, maxLength: 120 },
             viewerUserId: { type: "string", minLength: 1 },
+            claimedOnly: { type: "boolean" },
           },
         },
       },
@@ -76,6 +81,8 @@ export async function registerUserRoutes(app: FastifyInstance) {
             username: { type: "string", maxLength: 128, nullable: true },
             displayName: { type: "string", maxLength: 160, nullable: true },
             profileUrl: { type: "string", maxLength: 512, nullable: true },
+            authProvider: { type: "string", enum: authProviderValues, nullable: true },
+            source: { type: "string", maxLength: 80, nullable: true },
             metadata: { type: "object", additionalProperties: true, nullable: true },
           },
         },

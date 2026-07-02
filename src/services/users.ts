@@ -1,5 +1,5 @@
 import type { SocialAccount, TraderProfile, User } from "@prisma/client";
-import { Prisma, SocialPlatform } from "@prisma/client";
+import { AuthProvider, Prisma, SocialPlatform } from "@prisma/client";
 
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
@@ -10,6 +10,9 @@ export type CreateOrFetchSocialAccountInput = {
   username?: string | null;
   displayName?: string | null;
   profileUrl?: string | null;
+  authProvider?: AuthProvider | null;
+  source?: string | null;
+  metadata?: unknown;
 };
 
 export type UpsertTraderProfileInput = {
@@ -29,6 +32,7 @@ export type DiscoverUsersOptions = {
   limit?: number;
   query?: string;
   viewerUserId?: string;
+  claimedOnly?: boolean;
 };
 
 export type DiscoveredUser = {
@@ -78,6 +82,14 @@ export type NormalizedTraderProfile = {
 
 const handlePattern = /^[a-z0-9_][a-z0-9_.-]{1,39}\.viction$/;
 const victionSuffix = ".viction";
+const generatedHandlePatterns = [
+  /^wallet[a-f0-9]{6,}\.viction$/i,
+  /^trader[a-f0-9]{4,}\.viction$/i,
+  /^user[a-f0-9]{4,}\.viction$/i,
+  /^guest\.viction$/i,
+  /^trader\.viction$/i,
+  /^yourname\.viction$/i,
+];
 
 export async function createOrFetchSocialAccount(input: CreateOrFetchSocialAccountInput) {
   const platformUserId = input.platformUserId.trim();
@@ -112,12 +124,20 @@ export async function createOrFetchSocialAccount(input: CreateOrFetchSocialAccou
         data: {
           username: normalizeNullableStringUpdate(input.username),
           profileUrl: normalizeNullableStringUpdate(input.profileUrl),
+          authProvider: input.authProvider ?? existingSocialAccount.authProvider,
+          source: normalizeNullableStringUpdate(input.source),
+          metadata: toJsonValue(input.metadata),
+          firstSeenAt: existingSocialAccount.firstSeenAt ?? new Date(),
+          lastSeenAt: new Date(),
         },
       }),
       prisma.user.update({
         where: { id: existingSocialAccount.userId },
         data: {
           displayName: normalizeNullableStringUpdate(input.displayName),
+          firstSeenAt: existingSocialAccount.user.firstSeenAt ?? new Date(),
+          lastSeenAt: new Date(),
+          ...(input.source ? { acquisitionSource: input.source } : {}),
         },
         include: {
           traderProfile: true,
@@ -131,12 +151,21 @@ export async function createOrFetchSocialAccount(input: CreateOrFetchSocialAccou
   const user = await prisma.user.create({
     data: {
       displayName: normalizeNullableString(input.displayName),
+      firstSeenAt: new Date(),
+      lastSeenAt: new Date(),
+      sessionCount: 1,
+      acquisitionSource: normalizeNullableString(input.source),
       socialAccounts: {
         create: {
           platform: input.platform,
           platformUserId,
           username: normalizeNullableString(input.username),
           profileUrl: normalizeNullableString(input.profileUrl),
+          authProvider: input.authProvider ?? inferAuthProvider(input.platform, platformUserId),
+          source: normalizeNullableString(input.source),
+          metadata: toJsonValue(input.metadata),
+          firstSeenAt: new Date(),
+          lastSeenAt: new Date(),
         },
       },
     },
@@ -233,17 +262,26 @@ export async function getTraderProfileById(id: string) {
 export async function discoverUsers(options: DiscoverUsersOptions = {}) {
   const limit = clampUserLimit(options.limit);
   const query = options.query?.trim();
-  const where: Prisma.UserWhereInput = query
-    ? {
-        OR: [
-          { displayName: { contains: query, mode: "insensitive" } },
-          { traderProfile: { is: { handle: { contains: query, mode: "insensitive" } } } },
-          { socialAccounts: { some: { username: { contains: query, mode: "insensitive" } } } },
-        ],
-      }
-    : {};
+  const filters: Prisma.UserWhereInput[] = [];
 
-  const users = await prisma.user.findMany({
+  if (query) {
+    filters.push({
+      OR: [
+        { displayName: { contains: query, mode: "insensitive" } },
+        { traderProfile: { is: { handle: { contains: query, mode: "insensitive" } } } },
+        { socialAccounts: { some: { username: { contains: query, mode: "insensitive" } } } },
+      ],
+    });
+  }
+
+  if (options.claimedOnly) {
+    filters.push({ traderProfile: { is: { handle: { endsWith: victionSuffix, mode: "insensitive" } } } });
+  }
+
+  const where: Prisma.UserWhereInput = filters.length > 0 ? { AND: filters } : {};
+  const take = options.claimedOnly ? Math.min(Math.max(limit * 5, 100), 500) : limit;
+
+  let users = await prisma.user.findMany({
     where,
     include: {
       socialAccounts: true,
@@ -257,8 +295,12 @@ export async function discoverUsers(options: DiscoverUsersOptions = {}) {
       },
     },
     orderBy: { updatedAt: "desc" },
-    take: limit,
+    take,
   });
+
+  if (options.claimedOnly) {
+    users = users.filter((user) => isClaimedProfileHandle(user.traderProfile?.handle)).slice(0, limit);
+  }
 
   const viewerFollowing = options.viewerUserId
     ? new Set(
@@ -328,6 +370,15 @@ function normalizeUser(user: User): NormalizedUser {
   };
 }
 
+function isClaimedProfileHandle(handle: string | null | undefined) {
+  const normalized = handle?.trim().toLowerCase() ?? "";
+
+  if (!normalized.endsWith(victionSuffix)) return false;
+  if (generatedHandlePatterns.some((pattern) => pattern.test(normalized))) return false;
+
+  return normalized.slice(0, -victionSuffix.length).length >= 2;
+}
+
 function normalizeSocialAccount(socialAccount: SocialAccount): NormalizedSocialAccount {
   return {
     id: socialAccount.id,
@@ -369,6 +420,24 @@ function normalizeNullableString(value: string | null | undefined) {
 
 function normalizeNullableStringUpdate(value: string | null | undefined) {
   return typeof value === "undefined" ? undefined : normalizeNullableString(value);
+}
+
+function inferAuthProvider(platform: SocialPlatform, platformUserId: string) {
+  if (platform === SocialPlatform.TELEGRAM) return AuthProvider.TELEGRAM;
+  if (platform === SocialPlatform.FARCASTER) return AuthProvider.FARCASTER;
+  if (platform === SocialPlatform.WEB && platformUserId.startsWith("ton:")) return AuthProvider.TON_WALLET;
+  if (platform === SocialPlatform.WEB && /^0x[a-f0-9]{40}$/i.test(platformUserId)) return AuthProvider.EVM_EOA;
+
+  return AuthProvider.UNKNOWN;
+}
+
+function toJsonValue(value: unknown): Prisma.InputJsonValue | undefined {
+  if (typeof value === "undefined" || value === null) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeVictionHandle(value: string) {
