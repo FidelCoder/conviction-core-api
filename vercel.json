@@ -15,7 +15,7 @@
   "crons": [
     {
       "path": "/ops/markets/sync",
-      "schedule": "*/30 * * * *"
+      "schedule": "0 8 * * *"
     },
     {
       "path": "/telegram/market-digest",
