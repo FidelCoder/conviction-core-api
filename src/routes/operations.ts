@@ -14,38 +14,55 @@ type MarketSyncQuery = {
 const maxServerlessSyncLimit = 180;
 
 export async function registerOperationsRoutes(app: FastifyInstance) {
-  app.post<{ Querystring: MarketSyncQuery }>(
-    "/ops/markets/sync",
-    {
-      schema: {
-        querystring: {
-          type: "object",
-          properties: {
-            limit: { type: "string" },
-          },
+  const syncOptions = {
+    schema: {
+      querystring: {
+        type: "object",
+        properties: {
+          limit: { type: "string" },
         },
       },
     },
+  };
+
+  app.post<{ Querystring: MarketSyncQuery }>(
+    "/ops/markets/sync",
+    syncOptions,
     async (request, reply) => {
-      assertAuthorized(request.headers.authorization);
-
-      const limit =
-        parseLimit(request.query.limit) ??
-        Math.min(env.polymarketMarketsSyncLimit, maxServerlessSyncLimit);
-      const provider = new PolymarketProvider({
-        gammaApiUrl: env.polymarketGammaApiUrl,
-        listLimit: limit,
-      });
-      const result = await syncMarketsFromProvider(provider);
-
-      return sendSuccess(reply, {
-        requested: result.requested,
-        retired: result.retired,
-        source: result.source,
-        synced: result.synced,
-      });
+      return handleMarketSync(request.headers.authorization, request.query, reply);
     },
   );
+
+  app.get<{ Querystring: MarketSyncQuery }>(
+    "/ops/markets/sync",
+    syncOptions,
+    async (request, reply) => {
+      return handleMarketSync(request.headers.authorization, request.query, reply);
+    },
+  );
+}
+
+async function handleMarketSync(
+  authorization: string | undefined,
+  query: MarketSyncQuery,
+  reply: Parameters<typeof sendSuccess>[0],
+) {
+  assertAuthorized(authorization);
+
+  const limit =
+    parseLimit(query.limit) ?? Math.min(env.polymarketMarketsSyncLimit, maxServerlessSyncLimit);
+  const provider = new PolymarketProvider({
+    gammaApiUrl: env.polymarketGammaApiUrl,
+    listLimit: limit,
+  });
+  const result = await syncMarketsFromProvider(provider);
+
+  return sendSuccess(reply, {
+    requested: result.requested,
+    retired: result.retired,
+    source: result.source,
+    synced: result.synced,
+  });
 }
 
 function assertAuthorized(authorization: string | undefined) {
