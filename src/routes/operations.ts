@@ -29,7 +29,9 @@ export async function registerOperationsRoutes(app: FastifyInstance) {
     async (request, reply) => {
       assertAuthorized(request.headers.authorization);
 
-      const limit = parseLimit(request.query.limit) ?? Math.min(env.polymarketMarketsSyncLimit, maxServerlessSyncLimit);
+      const limit =
+        parseLimit(request.query.limit) ??
+        Math.min(env.polymarketMarketsSyncLimit, maxServerlessSyncLimit);
       const provider = new PolymarketProvider({
         gammaApiUrl: env.polymarketGammaApiUrl,
         listLimit: limit,
@@ -38,6 +40,7 @@ export async function registerOperationsRoutes(app: FastifyInstance) {
 
       return sendSuccess(reply, {
         requested: result.requested,
+        retired: result.retired,
         source: result.source,
         synced: result.synced,
       });
@@ -46,16 +49,20 @@ export async function registerOperationsRoutes(app: FastifyInstance) {
 }
 
 function assertAuthorized(authorization: string | undefined) {
-  if (!env.marketSyncToken) {
+  const allowedTokens = [env.marketSyncToken, env.cronSecret].filter(Boolean) as string[];
+
+  if (allowedTokens.length === 0) {
     throw new AppError("Market sync token is not configured", {
       code: "MARKET_SYNC_TOKEN_MISSING",
       statusCode: 503,
     });
   }
 
-  const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  const token = authorization?.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : "";
 
-  if (!isSameToken(token, env.marketSyncToken)) {
+  if (!allowedTokens.some((allowedToken) => isSameToken(token, allowedToken))) {
     throw new AppError("Market sync is not authorized", {
       code: "MARKET_SYNC_UNAUTHORIZED",
       statusCode: 401,

@@ -17,6 +17,7 @@ async function main() {
         ok: true,
         source: result.source,
         requested: result.requested,
+        retired: result.retired,
         synced: result.synced,
         marketIds: result.marketIds,
       },

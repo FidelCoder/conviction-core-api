@@ -77,11 +77,29 @@ type GammaEvent = z.infer<typeof gammaEventSchema>;
 type GammaTag = z.infer<typeof gammaTagSchema>;
 
 const discoveryEventLanes = [
-  { label: "World Cup", tagIds: ["519", "102232", "102350"], eventLimit: 16, marketLimit: 36, perEventMarketLimit: 7 },
-  { label: "Football", tagIds: ["100350", "9545"], eventLimit: 18, marketLimit: 34, perEventMarketLimit: 4 },
+  {
+    label: "World Cup",
+    tagIds: ["519", "102232", "102350"],
+    eventLimit: 16,
+    marketLimit: 36,
+    perEventMarketLimit: 7,
+  },
+  {
+    label: "Football",
+    tagIds: ["100350", "9545"],
+    eventLimit: 18,
+    marketLimit: 34,
+    perEventMarketLimit: 4,
+  },
   { label: "Sports", tagIds: ["1"], eventLimit: 18, marketLimit: 32, perEventMarketLimit: 3 },
   { label: "Esports", tagIds: ["64"], eventLimit: 12, marketLimit: 24, perEventMarketLimit: 4 },
-  { label: "Geopolitics", tagIds: ["100265", "842", "1396"], eventLimit: 12, marketLimit: 28, perEventMarketLimit: 4 },
+  {
+    label: "Geopolitics",
+    tagIds: ["100265", "842", "1396"],
+    eventLimit: 12,
+    marketLimit: 28,
+    perEventMarketLimit: 4,
+  },
   { label: "Politics", tagIds: ["2"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
   { label: "Crypto", tagIds: ["21"], eventLimit: 12, marketLimit: 28, perEventMarketLimit: 4 },
   { label: "Finance", tagIds: ["120"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
@@ -308,12 +326,16 @@ export class PolymarketProvider implements MarketProvider {
     }
 
     if (markets.size < this.listLimit) {
-      await this.collectMarketsFromEvents(markets, {}, {
-        eventLimit: this.listLimit,
-        marketLimit: this.listLimit - markets.size,
-        perEventMarketLimit: 5,
-        seenEventIds,
-      });
+      await this.collectMarketsFromEvents(
+        markets,
+        {},
+        {
+          eventLimit: this.listLimit,
+          marketLimit: this.listLimit - markets.size,
+          perEventMarketLimit: 5,
+          seenEventIds,
+        },
+      );
     }
 
     return Array.from(markets.values());
@@ -330,7 +352,9 @@ export class PolymarketProvider implements MarketProvider {
 
     for (
       let offset = 0;
-      markets.size < this.listLimit && scannedEvents < options.eventLimit && addedMarkets < options.marketLimit;
+      markets.size < this.listLimit &&
+      scannedEvents < options.eventLimit &&
+      addedMarkets < options.marketLimit;
       offset += pageSize
     ) {
       const remainingEvents = options.eventLimit - scannedEvents;
@@ -381,7 +405,11 @@ export class PolymarketProvider implements MarketProvider {
           this.listLimit,
         );
 
-        if (markets.size >= this.listLimit || scannedEvents >= options.eventLimit || addedMarkets >= options.marketLimit) {
+        if (
+          markets.size >= this.listLimit ||
+          scannedEvents >= options.eventLimit ||
+          addedMarkets >= options.marketLimit
+        ) {
           break;
         }
       }
@@ -504,8 +532,8 @@ export function mapGammaMarket(market: GammaMarket, event?: GammaEvent): Provide
     slug,
     conditionId: market.conditionId ?? null,
     questionId: market.questionID ?? null,
-    orderBookEnabled: market.enableOrderBook ?? false,
-    acceptingOrders: market.acceptingOrders ?? false,
+    orderBookEnabled: market.enableOrderBook ?? Boolean(yesTokenId),
+    acceptingOrders: market.acceptingOrders ?? market.active ?? false,
     orderPriceMinTickSize: market.orderPriceMinTickSize ?? null,
     orderMinSize: market.orderMinSize ?? null,
     lastTradePrice: market.lastTradePrice ?? null,
@@ -516,13 +544,16 @@ export function mapGammaMarket(market: GammaMarket, event?: GammaEvent): Provide
 }
 
 function mapMarketStatus(
-  market: Pick<GammaMarket, "active" | "archived" | "closed">,
+  market: Pick<
+    GammaMarket,
+    "acceptingOrders" | "active" | "archived" | "closed" | "endDate" | "endDateIso"
+  >,
 ): MarketStatus {
   if (market.archived) {
     return MarketStatus.CANCELLED;
   }
 
-  if (market.closed) {
+  if (market.closed || market.acceptingOrders === false || isPastGammaEndDate(market)) {
     return MarketStatus.CLOSED;
   }
 
@@ -541,6 +572,12 @@ function parseDate(value: string | null | undefined): Date | null {
   const date = new Date(value);
 
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isPastGammaEndDate(market: Pick<GammaMarket, "endDate" | "endDateIso">) {
+  const endDate = parseDate(market.endDate ?? market.endDateIso);
+
+  return Boolean(endDate && endDate.getTime() <= Date.now());
 }
 
 function parseTokenIds(value: string | null | undefined): [string | null, string | null] {
@@ -571,11 +608,23 @@ function firstDefined<TValue>(...values: Array<TValue | null | undefined>) {
 }
 
 function getMarketCategory(market: GammaMarket, event?: GammaEvent, primaryTag?: string | null) {
-  return primaryTag ?? market.category ?? getFirstTagLabel(event?.tags) ?? event?.title ?? market.events?.[0]?.title ?? null;
+  return (
+    primaryTag ??
+    market.category ??
+    getFirstTagLabel(event?.tags) ??
+    event?.title ??
+    market.events?.[0]?.title ??
+    null
+  );
 }
 
 function isTradableMarket(market: ProviderMarketInput) {
-  return market.status === MarketStatus.ACTIVE && Boolean(market.yesTokenId);
+  if (market.status !== MarketStatus.ACTIVE) return false;
+  if (!market.yesTokenId) return false;
+  if (market.acceptingOrders === false) return false;
+  if (market.resolutionDate && market.resolutionDate.getTime() <= Date.now()) return false;
+
+  return true;
 }
 
 function addEventMarkets(
@@ -616,10 +665,17 @@ function getEventSearchText(event: GammaEvent) {
   const tagLabels = getTagLabels(event.tags);
   const tagSlugs = getTagSlugs(event.tags);
   const marketText = (event.markets ?? [])
-    .map((market) => [market.question, market.description, market.category, market.groupItemTitle].filter(Boolean).join(" "))
+    .map((market) =>
+      [market.question, market.description, market.category, market.groupItemTitle]
+        .filter(Boolean)
+        .join(" "),
+    )
     .join(" ");
 
-  return [event.title, event.slug, marketText, ...tagLabels, ...tagSlugs].filter(Boolean).join(" ").toLowerCase();
+  return [event.title, event.slug, marketText, ...tagLabels, ...tagSlugs]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 function getScaledLaneMarketLimit(baseLimit: number, totalLimit: number) {
@@ -627,12 +683,22 @@ function getScaledLaneMarketLimit(baseLimit: number, totalLimit: number) {
 }
 
 function getRankedEventMarkets(event: GammaEvent) {
-  return [...(event.markets ?? [])].sort((left, right) => getGammaMarketScore(right) - getGammaMarketScore(left));
+  return [...(event.markets ?? [])].sort(
+    (left, right) => getGammaMarketScore(right) - getGammaMarketScore(left),
+  );
 }
 
 function getGammaMarketScore(market: GammaMarket) {
   return (
-    Number(firstDefined(market.volume24hr, market.volume1wk, market.volume1mo, market.volume1yr, market.volume) ?? 0) +
+    Number(
+      firstDefined(
+        market.volume24hr,
+        market.volume1wk,
+        market.volume1mo,
+        market.volume1yr,
+        market.volume,
+      ) ?? 0,
+    ) +
     Number(firstDefined(market.liquidityClob, market.liquidity) ?? 0) / 100
   );
 }
@@ -727,7 +793,18 @@ function inferDiscoveryTopics(
     topics.add("World Cup");
     topics.add("Sports");
   }
-  if (matchesAny(text, ["football", "soccer", "champions league", "premier league", "la liga", "serie a", "bundesliga", "uefa"])) {
+  if (
+    matchesAny(text, [
+      "football",
+      "soccer",
+      "champions league",
+      "premier league",
+      "la liga",
+      "serie a",
+      "bundesliga",
+      "uefa",
+    ])
+  ) {
     topics.add("Football");
     topics.add("Sports");
   }
@@ -739,14 +816,37 @@ function inferDiscoveryTopics(
     topics.add("Rugby");
     topics.add("Sports");
   }
-  if (matchesAny(text, ["esports", "counter-strike", "cs2", "league of legends", "valorant", "dota"])) topics.add("Esports");
-  if (matchesAny(text, ["crypto", "bitcoin", "btc", "ethereum", "solana", "airdrop"])) topics.add("Crypto");
-  if (matchesAny(text, ["geopolitics", "nato", "hormuz", "gaza", "iran", "russia", "ukraine", "taiwan"])) topics.add("Geopolitics");
-  if (matchesAny(text, ["election", "elections", "politics", "president", "parliament", "government"])) topics.add("Politics");
-  if (matchesAny(text, ["finance", "business", "earnings", "ipo", "stocks", "fed", "rates"])) topics.add("Finance");
-  if (matchesAny(text, ["tech", "technology", "openai", " ai ", "nvidia", "startup"])) topics.add("Tech");
-  if (matchesAny(text, ["weather", "hurricane", "temperature", "rain", "flood", "wildfire"])) topics.add("Weather");
-  if (matchesAny(text, ["culture", "pop culture", "movie", "music", "album", "celebrity"])) topics.add("Culture");
+  if (
+    matchesAny(text, ["esports", "counter-strike", "cs2", "league of legends", "valorant", "dota"])
+  )
+    topics.add("Esports");
+  if (matchesAny(text, ["crypto", "bitcoin", "btc", "ethereum", "solana", "airdrop"]))
+    topics.add("Crypto");
+  if (
+    matchesAny(text, [
+      "geopolitics",
+      "nato",
+      "hormuz",
+      "gaza",
+      "iran",
+      "russia",
+      "ukraine",
+      "taiwan",
+    ])
+  )
+    topics.add("Geopolitics");
+  if (
+    matchesAny(text, ["election", "elections", "politics", "president", "parliament", "government"])
+  )
+    topics.add("Politics");
+  if (matchesAny(text, ["finance", "business", "earnings", "ipo", "stocks", "fed", "rates"]))
+    topics.add("Finance");
+  if (matchesAny(text, ["tech", "technology", "openai", " ai ", "nvidia", "startup"]))
+    topics.add("Tech");
+  if (matchesAny(text, ["weather", "hurricane", "temperature", "rain", "flood", "wildfire"]))
+    topics.add("Weather");
+  if (matchesAny(text, ["culture", "pop culture", "movie", "music", "album", "celebrity"]))
+    topics.add("Culture");
 
   return Array.from(topics);
 }
@@ -759,47 +859,131 @@ function inferDiscoveryRegion(
 ) {
   const text = getMarketSearchText(market, event, tagLabels, tagSlugs);
 
-  if (matchesAny(text, ["crypto", "bitcoin", "ethereum", "airdrop", "token", "defi", "solana", "onchain", "on-chain"])) {
+  if (
+    matchesAny(text, [
+      "crypto",
+      "bitcoin",
+      "ethereum",
+      "airdrop",
+      "token",
+      "defi",
+      "solana",
+      "onchain",
+      "on-chain",
+    ])
+  ) {
     return "Crypto-native";
   }
 
-  if (matchesAny(text, ["israel", "hamas", "iran", "saudi", "uae", "qatar", "gaza", "middle east", "palestine", "abraham accords"])) return "Middle East";
-  if (matchesAny(text, [
-    "africa",
-    "african",
-    "afcon",
-    "caf ",
-    "caf-",
-    "nigeria",
-    "kenya",
-    "ghana",
-    "south africa",
-    "ethiopia",
-    "egypt",
-    "morocco",
-    "algeria",
-    "tunisia",
-    "senegal",
-    "ivory coast",
-    "cote d'ivoire",
-    "cameroon",
-    "uganda",
-    "tanzania",
-    "rwanda",
-    "zambia",
-    "angola",
-    "mali",
-    "dr congo",
-    "lagos",
-    "nairobi",
-    "johannesburg",
-    "cairo",
-    "casablanca",
-  ])) return "Africa";
-  if (matchesAny(text, ["china", "india", "japan", "korea", "singapore", "taiwan", "asia", "indonesia", "pakistan", "bangladesh"])) return "Asia";
-  if (matchesAny(text, ["uk", "britain", "london", "europe", "eu ", "france", "germany", "spain", "italy", "russia", "ukraine"])) return "Europe";
-  if (matchesAny(text, ["brazil", "argentina", "mexico", "colombia", "chile", "latin america", "latam"])) return "Latin America";
-  if (matchesAny(text, ["nba", "nfl", "mlb", "new york", "san antonio", "oklahoma", "vegas", "u.s.", "usa", "america", "united states"])) return "United States";
+  if (
+    matchesAny(text, [
+      "israel",
+      "hamas",
+      "iran",
+      "saudi",
+      "uae",
+      "qatar",
+      "gaza",
+      "middle east",
+      "palestine",
+      "abraham accords",
+    ])
+  )
+    return "Middle East";
+  if (
+    matchesAny(text, [
+      "africa",
+      "african",
+      "afcon",
+      "caf ",
+      "caf-",
+      "nigeria",
+      "kenya",
+      "ghana",
+      "south africa",
+      "ethiopia",
+      "egypt",
+      "morocco",
+      "algeria",
+      "tunisia",
+      "senegal",
+      "ivory coast",
+      "cote d'ivoire",
+      "cameroon",
+      "uganda",
+      "tanzania",
+      "rwanda",
+      "zambia",
+      "angola",
+      "mali",
+      "dr congo",
+      "lagos",
+      "nairobi",
+      "johannesburg",
+      "cairo",
+      "casablanca",
+    ])
+  )
+    return "Africa";
+  if (
+    matchesAny(text, [
+      "china",
+      "india",
+      "japan",
+      "korea",
+      "singapore",
+      "taiwan",
+      "asia",
+      "indonesia",
+      "pakistan",
+      "bangladesh",
+    ])
+  )
+    return "Asia";
+  if (
+    matchesAny(text, [
+      "uk",
+      "britain",
+      "london",
+      "europe",
+      "eu ",
+      "france",
+      "germany",
+      "spain",
+      "italy",
+      "russia",
+      "ukraine",
+    ])
+  )
+    return "Europe";
+  if (
+    matchesAny(text, [
+      "brazil",
+      "argentina",
+      "mexico",
+      "colombia",
+      "chile",
+      "latin america",
+      "latam",
+    ])
+  )
+    return "Latin America";
+  if (
+    matchesAny(text, [
+      "nba",
+      "nfl",
+      "mlb",
+      "new york",
+      "san antonio",
+      "oklahoma",
+      "vegas",
+      "u.s.",
+      "usa",
+      "america",
+      "united states",
+    ])
+  )
+    return "United States";
 
   return "Global";
 }
@@ -812,19 +996,48 @@ function getPrimaryEventTag(
 ) {
   const text = getMarketSearchText(market, event, tagLabels, tagSlugs);
 
-  if (matchesAny(text, ["afcon", "caf ", "caf-", "africa cup of nations", "cup of nations"])) return "African Football";
-  if (matchesAny(text, ["world cup", "fifa world cup", "2026-fifa-world-cup", "fifa-world-cup"])) return "World Cup";
-  if (matchesAny(text, ["football", "soccer", "champions league", "premier league", "la liga", "serie a", "bundesliga", "uefa"])) return "Football";
-  if (matchesAny(text, ["esports", "counter-strike", "cs2", "league of legends", "valorant", "dota"])) return "Esports";
-  if (matchesAny(text, ["geopolitics", "foreign affairs", "international affairs", "nato", "hormuz"])) return "Geopolitics";
-  if (matchesAny(text, ["crypto", "bitcoin", "btc", "ethereum", "solana", "airdrop"])) return "Crypto";
-  if (matchesAny(text, ["finance", "business", "earnings", "ipo", "stocks", "fed", "rates"])) return "Finance";
-  if (matchesAny(text, ["election", "elections", "politics", "president", "parliament", "government"])) return "Politics";
-  if (matchesAny(text, ["tech", "technology", "openai", " ai ", "nvidia", "startup"])) return "Tech";
-  if (matchesAny(text, ["weather", "hurricane", "temperature", "rain", "flood", "wildfire"])) return "Weather";
-  if (matchesAny(text, ["culture", "pop culture", "movie", "music", "album", "celebrity"])) return "Culture";
+  if (matchesAny(text, ["afcon", "caf ", "caf-", "africa cup of nations", "cup of nations"]))
+    return "African Football";
+  if (matchesAny(text, ["world cup", "fifa world cup", "2026-fifa-world-cup", "fifa-world-cup"]))
+    return "World Cup";
+  if (
+    matchesAny(text, [
+      "football",
+      "soccer",
+      "champions league",
+      "premier league",
+      "la liga",
+      "serie a",
+      "bundesliga",
+      "uefa",
+    ])
+  )
+    return "Football";
+  if (
+    matchesAny(text, ["esports", "counter-strike", "cs2", "league of legends", "valorant", "dota"])
+  )
+    return "Esports";
+  if (
+    matchesAny(text, ["geopolitics", "foreign affairs", "international affairs", "nato", "hormuz"])
+  )
+    return "Geopolitics";
+  if (matchesAny(text, ["crypto", "bitcoin", "btc", "ethereum", "solana", "airdrop"]))
+    return "Crypto";
+  if (matchesAny(text, ["finance", "business", "earnings", "ipo", "stocks", "fed", "rates"]))
+    return "Finance";
+  if (
+    matchesAny(text, ["election", "elections", "politics", "president", "parliament", "government"])
+  )
+    return "Politics";
+  if (matchesAny(text, ["tech", "technology", "openai", " ai ", "nvidia", "startup"]))
+    return "Tech";
+  if (matchesAny(text, ["weather", "hurricane", "temperature", "rain", "flood", "wildfire"]))
+    return "Weather";
+  if (matchesAny(text, ["culture", "pop culture", "movie", "music", "album", "celebrity"]))
+    return "Culture";
   if (matchesAny(text, ["economy", "inflation", "gdp", "recession", "tariff"])) return "Economy";
-  if (matchesAny(text, ["sports", "soccer", "nba", "nfl", "mlb", "nhl", "cricket", "ufc"])) return "Sports";
+  if (matchesAny(text, ["sports", "soccer", "nba", "nfl", "mlb", "nhl", "cricket", "ufc"]))
+    return "Sports";
 
   return null;
 }

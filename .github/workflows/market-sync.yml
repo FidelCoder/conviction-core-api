@@ -1,0 +1,32 @@
+name: Market sync
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-markets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync active Conviction markets
+        env:
+          CORE_API_URL: ${{ secrets.CORE_API_URL }}
+          CORE_CRON_SECRET: ${{ secrets.CORE_CRON_SECRET }}
+          MARKET_SYNC_TOKEN: ${{ secrets.MARKET_SYNC_TOKEN }}
+        run: |
+          if [ -z "$CORE_API_URL" ]; then
+            CORE_API_URL="https://conviction-core-api.vercel.app"
+          fi
+          TOKEN="$MARKET_SYNC_TOKEN"
+          if [ -z "$TOKEN" ]; then
+            TOKEN="$CORE_CRON_SECRET"
+          fi
+          if [ -z "$TOKEN" ]; then
+            echo "MARKET_SYNC_TOKEN or CORE_CRON_SECRET secret is missing"
+            exit 1
+          fi
+          curl --fail --show-error --silent \
+            -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            "$CORE_API_URL/ops/markets/sync?limit=180"
