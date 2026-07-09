@@ -1,5 +1,5 @@
-import type { Market } from "@prisma/client";
-import { MarketSource } from "@prisma/client";
+import type { Market, Prisma } from "@prisma/client";
+import { MarketSource, MarketStatus } from "@prisma/client";
 
 import { prisma } from "../lib/prisma.js";
 import type { MarketProvider, ProviderMarketInput } from "./market-provider.js";
@@ -85,16 +85,14 @@ export type MarketHistoryResult = {
 export type MarketSyncResult = {
   source: Market["source"];
   requested: number;
+  retired: number;
   synced: number;
   marketIds: string[];
 };
 
 export async function listMarkets(options: MarketListOptions = {}) {
   const markets = await prisma.market.findMany({
-    where: {
-      status: options.status,
-      ...(options.search ? buildSearchWhere(options.search) : {}),
-    },
+    where: buildMarketListWhere(options),
     orderBy: [{ syncedAt: "desc" }, { createdAt: "desc" }],
     take: options.limit,
   });
@@ -110,7 +108,10 @@ export async function getMarketById(id: string) {
   return market ? normalizeMarket(market) : null;
 }
 
-export async function getMarketHistory(id: string, range: MarketHistoryRange): Promise<MarketHistoryResult | null> {
+export async function getMarketHistory(
+  id: string,
+  range: MarketHistoryRange,
+): Promise<MarketHistoryResult | null> {
   const market = await prisma.market.findUnique({ where: { id } });
 
   if (!market) {
@@ -156,17 +157,26 @@ export async function getMarketHistory(id: string, range: MarketHistoryRange): P
 }
 
 export async function syncMarketsFromProvider(provider: MarketProvider): Promise<MarketSyncResult> {
+  const syncStartedAt = new Date();
   const providerMarkets = await provider.listMarkets();
+  const activeProviderMarkets = providerMarkets.filter(isProviderMarketListable);
   const marketIds: string[] = [];
 
-  for (const providerMarket of providerMarkets) {
+  for (const providerMarket of activeProviderMarkets) {
     const market = await upsertProviderMarket(providerMarket);
     marketIds.push(market.id);
   }
 
+  const retired = await retireInactiveProviderMarkets(
+    provider.source,
+    activeProviderMarkets.map((market) => market.externalMarketId),
+    syncStartedAt,
+  );
+
   return {
     source: provider.source,
     requested: providerMarkets.length,
+    retired,
     synced: marketIds.length,
     marketIds,
   };
@@ -283,6 +293,41 @@ async function upsertProviderMarket(providerMarket: ProviderMarketInput) {
   }
 }
 
+async function retireInactiveProviderMarkets(
+  source: MarketSource,
+  activeExternalMarketIds: string[],
+  now: Date,
+) {
+  const retirementFilters: Prisma.MarketWhereInput[] = [{ resolutionDate: { lte: now } }];
+
+  if (activeExternalMarketIds.length > 0) {
+    retirementFilters.push({ externalMarketId: { notIn: activeExternalMarketIds } });
+  }
+
+  const result = await prisma.market.updateMany({
+    where: {
+      source,
+      status: MarketStatus.ACTIVE,
+      OR: retirementFilters,
+    },
+    data: {
+      acceptingOrders: false,
+      status: MarketStatus.CLOSED,
+    },
+  });
+
+  return result.count;
+}
+
+function isProviderMarketListable(providerMarket: ProviderMarketInput) {
+  if (providerMarket.status !== MarketStatus.ACTIVE) return false;
+  if (!providerMarket.yesTokenId) return false;
+  if (providerMarket.resolutionDate && providerMarket.resolutionDate.getTime() <= Date.now())
+    return false;
+
+  return true;
+}
+
 function normalizeOptionalDecimalString(value: string | number | null | undefined) {
   if (value === null || typeof value === "undefined") {
     return null;
@@ -297,7 +342,6 @@ function isUniqueConstraintError(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "P2002";
 }
 
-
 type HistoryPoint = {
   p?: number;
   t?: number;
@@ -306,7 +350,30 @@ type HistoryPoint = {
 const polymarketClobUrl = "https://clob.polymarket.com";
 const historyTimeoutMs = 6500;
 
-function buildSearchWhere(search: string) {
+function buildMarketListWhere(options: MarketListOptions): Prisma.MarketWhereInput {
+  const filters: Prisma.MarketWhereInput[] = [];
+
+  if (options.search?.trim()) {
+    filters.push(buildSearchWhere(options.search));
+  }
+
+  if (options.status === MarketStatus.ACTIVE) {
+    filters.push(buildActiveMarketWhere(new Date()));
+  }
+
+  return {
+    status: options.status,
+    ...(filters.length > 0 ? { AND: filters } : {}),
+  };
+}
+
+function buildActiveMarketWhere(now: Date): Prisma.MarketWhereInput {
+  return {
+    OR: [{ resolutionDate: null }, { resolutionDate: { gt: now } }],
+  };
+}
+
+function buildSearchWhere(search: string): Prisma.MarketWhereInput {
   const query = search.trim();
 
   if (!query) {
@@ -335,7 +402,13 @@ function compareNormalizedMarkets(left: NormalizedMarket, right: NormalizedMarke
 }
 
 function getMarketSortScore(market: NormalizedMarket) {
-  const volume = Number(market.volume24hr ?? market.volume1wk ?? market.volume1mo ?? market.providerMetadata.totalVolume ?? 0);
+  const volume = Number(
+    market.volume24hr ??
+      market.volume1wk ??
+      market.volume1mo ??
+      market.providerMetadata.totalVolume ??
+      0,
+  );
   const liquidity = Number(market.liquidity ?? 0);
   const liveBonus = market.status === "ACTIVE" ? 1_000_000 : 0;
   const discoveryBonus = getDiscoverySortBonus(market);
@@ -440,7 +513,10 @@ function getHistoryRangeSettings(range: MarketHistoryRange) {
 
 function pointsToCandles(points: HistoryPoint[]): MarketCandle[] {
   return points
-    .filter((point): point is { p: number; t: number } => Number.isFinite(point.p) && Number.isFinite(point.t))
+    .filter(
+      (point): point is { p: number; t: number } =>
+        Number.isFinite(point.p) && Number.isFinite(point.t),
+    )
     .map((point, index, filteredPoints) => {
       const previous = filteredPoints[index - 1]?.p ?? point.p;
       const open = clampProbability(previous * 100);
