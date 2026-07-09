@@ -37,7 +37,7 @@ export async function registerMarketRoutes(app: FastifyInstance) {
       const markets = await listMarkets({
         limit: parseLimit(request.query.limit),
         search: request.query.q,
-        status: request.query.status,
+        status: request.query.status ?? "ACTIVE",
       });
 
       return sendSuccess(reply, { markets });
