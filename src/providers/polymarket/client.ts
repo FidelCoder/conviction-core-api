@@ -107,6 +107,8 @@ const discoveryEventLanes = [
   { label: "World", tagIds: ["101970"], eventLimit: 10, marketLimit: 22, perEventMarketLimit: 4 },
 ] as const;
 
+const providerRequestTimeoutMs = 5000;
+
 const discoveryKeywordLanes = [
   {
     label: "Africa",
@@ -456,14 +458,18 @@ export class PolymarketProvider implements MarketProvider {
   }
 
   private async fetchJson(url: URL): Promise<unknown> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), providerRequestTimeoutMs);
     let response: Response;
 
     try {
-      response = await fetch(url);
+      response = await fetch(url, { signal: controller.signal });
     } catch (error) {
       throw new PolymarketProviderError("Failed to reach Polymarket Gamma API at " + url.origin, {
         cause: error,
       });
+    } finally {
+      clearTimeout(timeout);
     }
 
     if (!response.ok) {

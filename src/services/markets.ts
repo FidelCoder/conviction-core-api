@@ -1,7 +1,9 @@
 import type { Market, Prisma } from "@prisma/client";
 import { MarketSource, MarketStatus } from "@prisma/client";
 
+import { env } from "../config/index.js";
 import { prisma } from "../lib/prisma.js";
+import { PolymarketProvider } from "../providers/polymarket/index.js";
 import type { MarketProvider, ProviderMarketInput } from "./market-provider.js";
 
 export type MarketListOptions = {
@@ -91,13 +93,35 @@ export type MarketSyncResult = {
 };
 
 export async function listMarkets(options: MarketListOptions = {}) {
-  const markets = await prisma.market.findMany({
+  const effectiveOptions = {
+    ...options,
+    status: options.status ?? MarketStatus.ACTIVE,
+  };
+
+  if (effectiveOptions.status === MarketStatus.ACTIVE) {
+    await retireLocallyInactiveMarkets(new Date());
+  }
+
+  let markets = await findMarketRows(effectiveOptions);
+
+  if (effectiveOptions.status === MarketStatus.ACTIVE) {
+    const refreshed = await refreshStaleActiveMarketRows(markets);
+
+    if (refreshed > 0) {
+      await retireLocallyInactiveMarkets(new Date());
+      markets = await findMarketRows(effectiveOptions);
+    }
+  }
+
+  return markets.map(normalizeMarket).sort(compareNormalizedMarkets);
+}
+
+function findMarketRows(options: MarketListOptions) {
+  return prisma.market.findMany({
     where: buildMarketListWhere(options),
     orderBy: [{ syncedAt: "desc" }, { createdAt: "desc" }],
     take: options.limit,
   });
-
-  return markets.map(normalizeMarket).sort(compareNormalizedMarkets);
 }
 
 export async function getMarketById(id: string) {
@@ -298,7 +322,7 @@ async function retireInactiveProviderMarkets(
   activeExternalMarketIds: string[],
   now: Date,
 ) {
-  const retirementFilters: Prisma.MarketWhereInput[] = [{ resolutionDate: { lte: now } }];
+  const retirementFilters: Prisma.MarketWhereInput[] = buildLocalInactiveMarketFilters(now);
 
   if (activeExternalMarketIds.length > 0) {
     retirementFilters.push({ externalMarketId: { notIn: activeExternalMarketIds } });
@@ -317,6 +341,30 @@ async function retireInactiveProviderMarkets(
   });
 
   return result.count;
+}
+
+async function retireLocallyInactiveMarkets(now: Date) {
+  const result = await prisma.market.updateMany({
+    where: {
+      status: MarketStatus.ACTIVE,
+      OR: buildLocalInactiveMarketFilters(now),
+    },
+    data: {
+      acceptingOrders: false,
+      status: MarketStatus.CLOSED,
+    },
+  });
+
+  return result.count;
+}
+
+function buildLocalInactiveMarketFilters(now: Date): Prisma.MarketWhereInput[] {
+  return [
+    { resolutionDate: { lte: now } },
+    { acceptingOrders: false },
+    { orderBookEnabled: false },
+    { yesTokenId: null },
+  ];
 }
 
 function isProviderMarketListable(providerMarket: ProviderMarketInput) {
@@ -349,6 +397,9 @@ type HistoryPoint = {
 
 const polymarketClobUrl = "https://clob.polymarket.com";
 const historyTimeoutMs = 6500;
+const activeMarketRefreshStaleMs = 5 * 60 * 1000;
+const activeMarketRefreshConcurrency = 20;
+const activeMarketRefreshLimit = 100;
 
 function buildMarketListWhere(options: MarketListOptions): Prisma.MarketWhereInput {
   const filters: Prisma.MarketWhereInput[] = [];
@@ -369,8 +420,88 @@ function buildMarketListWhere(options: MarketListOptions): Prisma.MarketWhereInp
 
 function buildActiveMarketWhere(now: Date): Prisma.MarketWhereInput {
   return {
+    acceptingOrders: true,
+    orderBookEnabled: true,
+    yesTokenId: { not: null },
     OR: [{ resolutionDate: null }, { resolutionDate: { gt: now } }],
   };
+}
+
+async function refreshStaleActiveMarketRows(markets: Market[]) {
+  const staleMarkets = markets
+    .filter((market) => shouldRefreshActiveMarket(market, Date.now()))
+    .slice(0, activeMarketRefreshLimit);
+
+  if (staleMarkets.length === 0) {
+    return 0;
+  }
+
+  const polymarketProvider = new PolymarketProvider({
+    gammaApiUrl: env.polymarketGammaApiUrl,
+    listLimit: Math.min(env.polymarketMarketsSyncLimit, activeMarketRefreshLimit),
+  });
+
+  return runWithConcurrency(staleMarkets, activeMarketRefreshConcurrency, async (market) => {
+    if (market.source !== MarketSource.POLYMARKET) {
+      return false;
+    }
+
+    try {
+      const providerMarket = await polymarketProvider.getMarketById(market.externalMarketId);
+
+      if (!providerMarket) {
+        await closeMarket(market.id);
+        return true;
+      }
+
+      await upsertProviderMarket(providerMarket);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function shouldRefreshActiveMarket(market: Market, nowMs: number) {
+  if (market.status !== MarketStatus.ACTIVE) return false;
+  if (!market.acceptingOrders || !market.orderBookEnabled || !market.yesTokenId) return true;
+  if (market.resolutionDate && market.resolutionDate.getTime() <= nowMs) return true;
+
+  const syncedAtMs = market.syncedAt?.getTime() ?? 0;
+
+  return nowMs - syncedAtMs >= activeMarketRefreshStaleMs;
+}
+
+async function closeMarket(id: string) {
+  await prisma.market.update({
+    where: { id },
+    data: {
+      acceptingOrders: false,
+      status: MarketStatus.CLOSED,
+    },
+  });
+}
+
+async function runWithConcurrency<TItem>(
+  items: TItem[],
+  concurrency: number,
+  task: (item: TItem) => Promise<boolean>,
+) {
+  let completed = 0;
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++];
+
+      if (await task(item)) {
+        completed += 1;
+      }
+    }
+  });
+
+  await Promise.all(workers);
+
+  return completed;
 }
 
 function buildSearchWhere(search: string): Prisma.MarketWhereInput {
