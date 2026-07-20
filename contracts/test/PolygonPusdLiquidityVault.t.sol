@@ -417,6 +417,30 @@ contract PolygonPusdLiquidityVaultTest {
         require(vault.marketExposure(MARKET_ID) == 0, "exposure remains");
     }
 
+    function testTraderCanRepayActivePrincipalWithoutChangingLpAssets() public {
+        vault.deposit(1_000 * UNIT, address(this));
+        (bytes32 loanId, PolymarketIsolatedMarginAccount account) =
+            _fundAndBuy(100 * UNIT, 100 * UNIT, 200 * UNIT, 200 * UNIT);
+        adapter.activate(vault, loanId, 200 * UNIT, keccak256("fill"));
+
+        vault.repayLoanPrincipal(loanId, 40 * UNIT);
+        require(vault.totalBorrowedAssets() == 60 * UNIT, "principal not reduced");
+        require(vault.marketExposure(MARKET_ID) == 60 * UNIT, "market exposure not reduced");
+        require(vault.accountExposure(address(this)) == 60 * UNIT, "account exposure not reduced");
+        require(vault.totalAssets() == 1_000 * UNIT, "repayment changed lp assets");
+
+        bool overRepayReverted;
+        try vault.repayLoanPrincipal(loanId, 61 * UNIT) { }
+        catch {
+            overRepayReverted = true;
+        }
+        require(overRepayReverted, "over-repayment accepted");
+
+        _closeAndSettle(loanId, account, 200 * UNIT, 160 * UNIT, keccak256("close"));
+        require(vault.totalBorrowedAssets() == 0, "debt remains");
+        require(vault.totalAssets() == 1_000 * UNIT, "settlement changed lp assets");
+    }
+
     function testProtocolFeesRequireExplicitReserveAllocation() public {
         vault.deposit(1_000 * UNIT, address(this));
         (bytes32 loanId, PolymarketIsolatedMarginAccount account) =

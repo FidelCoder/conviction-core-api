@@ -131,6 +131,8 @@ enum PolymarketCloseReason {
   MANDATORY
   LIQUIDATION
   RESOLUTION
+  STOP_LOSS
+  TAKE_PROFIT
 }
 
 enum PolymarketCloseStage {
@@ -561,16 +563,50 @@ model PolymarketMarginExecution {
   closingAt                 DateTime?
   closedAt                  DateTime?
   activeCloseAttemptId      String?                        @db.ObjectId
+  stopLossPrice             String?
+  takeProfitPrice           String?
   lastReconciledAt          DateTime?
   createdAt                 DateTime                       @default(now())
   updatedAt                 DateTime                       @updatedAt
   position                  Position                       @relation(fields: [positionId], references: [id], onDelete: NoAction)
   closeAttempts             PolymarketCloseAttempt[]
+  debtRepayments            PolymarketDebtRepayment[]
+  riskControlAuthorizations PolymarketRiskControlAuthorization[]
 
   @@index([state])
   @@index([authorizationSigner])
   @@index([depositWalletAddress])
   @@index([lastReconciledAt])
+}
+
+model PolymarketDebtRepayment {
+  id              String                    @id @default(auto()) @map("_id") @db.ObjectId
+  executionId     String                    @db.ObjectId
+  userId          String                    @db.ObjectId
+  assets          String
+  transactionHash String                    @unique
+  confirmedAt     DateTime
+  createdAt       DateTime                  @default(now())
+  execution       PolymarketMarginExecution @relation(fields: [executionId], references: [id], onDelete: NoAction)
+
+  @@index([executionId])
+  @@index([userId])
+}
+
+model PolymarketRiskControlAuthorization {
+  id                     String                    @id @default(auto()) @map("_id") @db.ObjectId
+  executionId            String                    @db.ObjectId
+  authorizationNonce     String                    @unique
+  authorizationDeadline  DateTime
+  authorizationSigner    String
+  authorizationSignature String
+  stopLossPrice          String?
+  takeProfitPrice        String?
+  createdAt              DateTime                  @default(now())
+  execution              PolymarketMarginExecution @relation(fields: [executionId], references: [id], onDelete: NoAction)
+
+  @@index([executionId])
+  @@index([createdAt])
 }
 
 model PolymarketCloseAttempt {

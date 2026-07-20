@@ -19,9 +19,14 @@ import {
   authorizePolymarketPositionClose,
   getPolymarketCloseAttempts,
   getPolymarketExecutionReadiness,
+  getPolymarketPositionControls,
   preparePolymarketPositionClose,
+  preparePolymarketPositionControls,
+  preparePolymarketPrincipalRepayment,
+  recordPolymarketPrincipalRepayment,
   recordPolymarketExecutionWalletCommit,
   recordPolymarketLoanReservation,
+  updatePolymarketPositionControls,
   type AuthorizePolymarketCloseInput,
   type PreparePolymarketCloseInput,
 } from "../services/polymarket-execution-orchestrator.js";
@@ -154,6 +159,137 @@ export async function registerExecutionRoutes(app: FastifyInstance) {
     },
   );
 
+  app.get<{ Params: PositionExecutionParams; Querystring: { userId: string } }>(
+    "/execution/positions/:positionId/polymarket/controls",
+    {
+      schema: {
+        params: positionParamsSchema,
+        querystring: {
+          type: "object",
+          required: ["userId"],
+          additionalProperties: false,
+          properties: { userId: { type: "string", minLength: 1 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      return sendSuccess(reply, {
+        controls: await getPolymarketPositionControls(
+          request.params.positionId,
+          request.query.userId,
+        ),
+      });
+    },
+  );
+
+  app.put<{
+    Params: PositionExecutionParams;
+    Body: {
+      userId: string;
+      stopLossPrice: string | null;
+      takeProfitPrice: string | null;
+      nonce: string;
+      deadline: number;
+      signature: string;
+    };
+  }>(
+    "/execution/positions/:positionId/polymarket/controls",
+    {
+      schema: {
+        params: positionParamsSchema,
+        body: {
+          type: "object",
+          required: [
+            "userId",
+            "stopLossPrice",
+            "takeProfitPrice",
+            "nonce",
+            "deadline",
+            "signature",
+          ],
+          additionalProperties: false,
+          properties: {
+            userId: { type: "string", minLength: 1 },
+            stopLossPrice: { ...decimalSchema, nullable: true },
+            takeProfitPrice: { ...decimalSchema, nullable: true },
+            nonce: { type: "string", pattern: "^0x[a-fA-F0-9]{64}$" },
+            deadline: { type: "integer" },
+            signature: { type: "string", pattern: "^0x[a-fA-F0-9]+$" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      return sendSuccess(reply, {
+        controls: await updatePolymarketPositionControls({
+          positionId: request.params.positionId,
+          ...request.body,
+        }),
+      });
+    },
+  );
+
+  app.post<{
+    Params: PositionExecutionParams;
+    Body: {
+      userId: string;
+      stopLossPrice: string | null;
+      takeProfitPrice: string | null;
+      nonce: string;
+      deadline: number;
+    };
+  }>(
+    "/execution/positions/:positionId/polymarket/controls/prepare",
+    {
+      schema: {
+        params: positionParamsSchema,
+        body: {
+          type: "object",
+          required: ["userId", "stopLossPrice", "takeProfitPrice", "nonce", "deadline"],
+          additionalProperties: false,
+          properties: {
+            userId: { type: "string", minLength: 1 },
+            stopLossPrice: { ...decimalSchema, nullable: true },
+            takeProfitPrice: { ...decimalSchema, nullable: true },
+            nonce: { type: "string", pattern: "^0x[a-fA-F0-9]{64}$" },
+            deadline: { type: "integer" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      return sendSuccess(reply, {
+        prepared: await preparePolymarketPositionControls({
+          positionId: request.params.positionId,
+          ...request.body,
+        }),
+      });
+    },
+  );
+
+  app.post<{ Params: PositionExecutionParams; Body: { userId: string; assets: string } }>(
+    "/execution/positions/:positionId/polymarket/repay/prepare",
+    {
+      schema: {
+        params: positionParamsSchema,
+        body: {
+          type: "object",
+          required: ["userId", "assets"],
+          additionalProperties: false,
+          properties: { userId: { type: "string", minLength: 1 }, assets: decimalSchema },
+        },
+      },
+    },
+    async (request, reply) => {
+      return sendSuccess(reply, {
+        prepared: await preparePolymarketPrincipalRepayment({
+          positionId: request.params.positionId,
+          ...request.body,
+        }),
+      });
+    },
+  );
+
   app.post<{ Params: PositionExecutionParams; Body: PreparePolymarketCloseInput }>(
     "/execution/positions/:positionId/polymarket/close/prepare",
     { schema: polymarketClosePreparationSchema },
@@ -245,6 +381,36 @@ export async function registerExecutionRoutes(app: FastifyInstance) {
         transactionHash: request.body.transactionHash,
       });
       return sendSuccess(reply, { execution });
+    },
+  );
+
+  app.post<{
+    Params: { executionId: string };
+    Body: { userId: string; assets: string; transactionHash: string };
+  }>(
+    "/execution/polymarket/:executionId/repayments",
+    {
+      schema: {
+        params: executionIdParamsSchema,
+        body: {
+          type: "object",
+          required: ["userId", "assets", "transactionHash"],
+          additionalProperties: false,
+          properties: {
+            userId: { type: "string", minLength: 1 },
+            assets: decimalSchema,
+            transactionHash: { type: "string", pattern: "^0x[a-fA-F0-9]{64}$" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      return sendSuccess(reply, {
+        controls: await recordPolymarketPrincipalRepayment({
+          executionId: request.params.executionId,
+          ...request.body,
+        }),
+      });
     },
   );
 

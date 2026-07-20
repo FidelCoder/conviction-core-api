@@ -61,6 +61,7 @@ import {
 } from "./polymarket-execution-state.js";
 
 const polygonChainId = 137;
+const activeRepaymentVersion = keccak256(toBytes("CONVICTION_ACTIVE_REPAYMENT_V1"));
 const transactionHashPattern = /^0x[a-fA-F0-9]{64}$/;
 // Polygon receipt waits can outlive one serverless request. Keep the lease longer than any
 // bounded provider stage; expired leases are still recovered from onchain/CLOB state.
@@ -73,6 +74,8 @@ const closeReasonCode = {
   MANDATORY: 1,
   LIQUIDATION: 2,
   RESOLUTION: 3,
+  STOP_LOSS: 4,
+  TAKE_PROFIT: 5,
 } as const;
 
 const closeAuthorizationTypes = {
@@ -85,6 +88,16 @@ const closeAuthorizationTypes = {
     { name: "priceLimit", type: "uint256" },
     { name: "maxSlippageBps", type: "uint16" },
     { name: "reason", type: "uint8" },
+    { name: "nonce", type: "bytes32" },
+    { name: "deadline", type: "uint256" },
+  ],
+} as const;
+const riskControlAuthorizationTypes = {
+  RiskControlAuthorization: [
+    { name: "positionId", type: "bytes32" },
+    { name: "loanId", type: "bytes32" },
+    { name: "stopLossPrice", type: "uint256" },
+    { name: "takeProfitPrice", type: "uint256" },
     { name: "nonce", type: "bytes32" },
     { name: "deadline", type: "uint256" },
   ],
@@ -104,8 +117,12 @@ const executionRequestSchema = z.object({
 const loanReservedEvent = parseAbiItem(
   "event LoanReserved(bytes32 indexed loanId,address indexed trader,address indexed custodyAccount,bytes32 marketId,uint256 traderEquity,uint256 borrowAssets)",
 );
+const loanPrincipalRepaidEvent = parseAbiItem(
+  "event LoanPrincipalRepaid(bytes32 indexed loanId,address indexed trader,uint256 assets,uint256 remainingPrincipal)",
+);
 const vaultAbi = parseAbi([
   "function asset() view returns (address)",
+  "function ACTIVE_REPAYMENT_VERSION() view returns (bytes32)",
   "function deploymentChainId() view returns (uint256)",
   "function authorizedAdapters(address) view returns (bool)",
   "function owner() view returns (address)",
@@ -120,6 +137,7 @@ const vaultAbi = parseAbi([
   "function commitExecutionWallet(bytes32 loanId,address executionWallet)",
   "function failLoan(bytes32 loanId,bytes32 reasonCode)",
   "function beginLoanClose(bytes32 loanId)",
+  "function repayLoanPrincipal(bytes32 loanId,uint256 assets)",
   "function restoreLoanAfterFailedClose(bytes32 loanId)",
   "function settleLoan(bytes32 loanId,bytes32 settlementRef)",
   "function activateLoan(bytes32 loanId,uint256 securedOutcomeShares,bytes32 executionRef)",
@@ -130,6 +148,7 @@ const custodyAbi = parseAbi([
 ]);
 const erc20Abi = parseAbi([
   "function balanceOf(address) view returns (uint256)",
+  "function approve(address spender,uint256 amount) returns (bool)",
   "function transfer(address recipient,uint256 amount) returns (bool)",
 ]);
 const erc1155Abi = parseAbi([
@@ -458,6 +477,227 @@ export async function getPolymarketCloseAttempts(positionId: string, userId: str
   return attempts.map(normalizeCloseAttempt);
 }
 
+export async function getPolymarketPositionControls(positionId: string, userId: string) {
+  const execution = await getOwnedExecutionByPosition(positionId, userId);
+  const loan = execution.loanId
+    ? await readLoan(execution.vaultAddress, execution.loanId as Hex)
+    : null;
+  const repayments = await prisma.polymarketDebtRepayment.findMany({
+    where: { executionId: execution.id },
+    orderBy: { confirmedAt: "desc" },
+  });
+  return {
+    activeRepaymentEnabled: env.polymarketActiveRepayEnabled,
+    stopLossPrice: execution.stopLossPrice,
+    takeProfitPrice: execution.takeProfitPrice,
+    currentBorrowAssets: loan ? formatSixDecimalAssets(loan.borrowAssets) : null,
+    warning:
+      "Stop-loss and take-profit are best-effort instructions. Thin liquidity, gaps, outages, and resolution can produce a different exit price.",
+    repayments: repayments.map((repayment) => ({
+      ...repayment,
+      confirmedAt: repayment.confirmedAt.toISOString(),
+      createdAt: repayment.createdAt.toISOString(),
+    })),
+  };
+}
+
+export async function preparePolymarketPositionControls(input: {
+  positionId: string;
+  userId: string;
+  stopLossPrice: string | null;
+  takeProfitPrice: string | null;
+  nonce: string;
+  deadline: number;
+}) {
+  const execution = await getOwnedExecutionByPosition(input.positionId, input.userId);
+  assertRiskControlsCanChange(execution, input.nonce, input.deadline);
+  const stopLossPrice = optionalProbability(input.stopLossPrice, "stopLossPrice");
+  const takeProfitPrice = optionalProbability(input.takeProfitPrice, "takeProfitPrice");
+  assertRiskControlOrder(stopLossPrice, takeProfitPrice);
+  return {
+    stopLossPrice,
+    takeProfitPrice,
+    typedData: serializeTypedData(
+      buildRiskControlTypedData(execution, {
+        ...input,
+        stopLossPrice,
+        takeProfitPrice,
+      }),
+    ),
+    warning:
+      "Signing stores best-effort exit instructions for this position only. It does not guarantee the trigger or fill price.",
+  };
+}
+
+export async function updatePolymarketPositionControls(input: {
+  positionId: string;
+  userId: string;
+  stopLossPrice: string | null;
+  takeProfitPrice: string | null;
+  nonce: string;
+  deadline: number;
+  signature: string;
+}) {
+  const execution = await getOwnedExecutionByPosition(input.positionId, input.userId);
+  assertRiskControlsCanChange(execution, input.nonce, input.deadline);
+  const stopLossPrice = optionalProbability(input.stopLossPrice, "stopLossPrice");
+  const takeProfitPrice = optionalProbability(input.takeProfitPrice, "takeProfitPrice");
+  assertRiskControlOrder(stopLossPrice, takeProfitPrice);
+  if (!/^0x[a-fA-F0-9]+$/.test(input.signature) || input.signature.length < 132) {
+    throw new AppError("Risk-control signature is malformed", {
+      code: "INVALID_RISK_CONTROL_SIGNATURE",
+      statusCode: 422,
+    });
+  }
+  const typedData = buildRiskControlTypedData(execution, {
+    ...input,
+    stopLossPrice,
+    takeProfitPrice,
+  });
+  const signatureValid = await polygonPublicClient().verifyTypedData({
+    address: execution.authorizationSigner as Address,
+    ...typedData,
+    signature: input.signature as Hex,
+  });
+  if (!signatureValid) {
+    throw new AppError("Risk-control signature is invalid", {
+      code: "INVALID_RISK_CONTROL_SIGNATURE",
+      statusCode: 401,
+    });
+  }
+  try {
+    await prisma.$transaction([
+      prisma.polymarketRiskControlAuthorization.create({
+        data: {
+          executionId: execution.id,
+          authorizationNonce: input.nonce.toLowerCase(),
+          authorizationDeadline: new Date(input.deadline * 1_000),
+          authorizationSigner: execution.authorizationSigner,
+          authorizationSignature: input.signature,
+          stopLossPrice,
+          takeProfitPrice,
+        },
+      }),
+      prisma.polymarketMarginExecution.update({
+        where: { id: execution.id },
+        data: { stopLossPrice, takeProfitPrice },
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new AppError("Risk-control authorization nonce was already used", {
+        code: "RISK_CONTROL_AUTHORIZATION_REPLAY",
+        statusCode: 409,
+      });
+    }
+    throw error;
+  }
+  return getPolymarketPositionControls(input.positionId, input.userId);
+}
+
+export async function preparePolymarketPrincipalRepayment(input: {
+  positionId: string;
+  userId: string;
+  assets: string;
+}) {
+  if (!env.polymarketActiveRepayEnabled) {
+    throw new AppError(
+      "Active principal repayment requires the compatible Polygon vault deployment",
+      {
+        code: "ACTIVE_REPAYMENT_NOT_ENABLED",
+        statusCode: 503,
+      },
+    );
+  }
+  const execution = await getOwnedExecutionByPosition(input.positionId, input.userId);
+  if (execution.state !== PolymarketMarginExecutionState.OPEN || !execution.loanId) {
+    throw new AppError("Only an open margin position can reduce principal", {
+      code: "POSITION_NOT_OPEN",
+      statusCode: 422,
+    });
+  }
+  const assets = parseSixDecimalAssets(input.assets, "assets");
+  const loan = await readLoan(execution.vaultAddress, execution.loanId as Hex);
+  if (assets === 0n || assets > loan.borrowAssets) {
+    throw new AppError("Repayment must be positive and no greater than current principal", {
+      code: "INVALID_REPAYMENT_AMOUNT",
+      statusCode: 422,
+    });
+  }
+  const approvalCall = {
+    id: "approve-pusd-repayment",
+    chainId: polygonChainId,
+    to: requiredAddress(env.polymarketPusdAddress, "POLYMARKET_PUSD_ADDRESS"),
+    value: "0",
+    data: encodeFunctionData({
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [execution.vaultAddress as Address, assets],
+    }),
+  };
+  const repaymentCall = {
+    id: "repay-principal",
+    chainId: polygonChainId,
+    to: execution.vaultAddress,
+    value: "0",
+    data: encodeFunctionData({
+      abi: vaultAbi,
+      functionName: "repayLoanPrincipal",
+      args: [execution.loanId as Hex, assets],
+    }),
+  };
+  return {
+    assets: formatSixDecimalAssets(assets),
+    currentBorrowAssets: formatSixDecimalAssets(loan.borrowAssets),
+    remainingBorrowAssets: formatSixDecimalAssets(loan.borrowAssets - assets),
+    walletCalls: [approvalCall, repaymentCall],
+  };
+}
+
+export async function recordPolymarketPrincipalRepayment(input: {
+  executionId: string;
+  userId: string;
+  assets: string;
+  transactionHash: string;
+}) {
+  if (!env.polymarketActiveRepayEnabled) throw new Error("Active repayment is disabled");
+  const execution = await getOwnedExecution(input.executionId, input.userId);
+  if (!execution.loanId) throw new Error("Execution has no active vault loan");
+  const expectedAssets = parseSixDecimalAssets(input.assets, "assets");
+  if (!transactionHashPattern.test(input.transactionHash))
+    throw new Error("Repayment transaction hash is malformed");
+  const receipt = await polygonPublicClient().waitForTransactionReceipt({
+    hash: input.transactionHash as Hex,
+  });
+  if (receipt.status !== "success") throw new Error("Principal repayment failed on Polygon");
+  const event = parsePrincipalRepayment(receipt.logs, execution.vaultAddress);
+  if (
+    !event ||
+    event.loanId.toLowerCase() !== execution.loanId.toLowerCase() ||
+    event.trader.toLowerCase() !== execution.position.walletAddress?.toLowerCase() ||
+    event.assets !== expectedAssets
+  ) {
+    throw new Error("Repayment receipt does not match this position and amount");
+  }
+  await prisma.polymarketDebtRepayment.upsert({
+    where: { transactionHash: receipt.transactionHash.toLowerCase() },
+    create: {
+      executionId: execution.id,
+      userId: input.userId,
+      assets: formatSixDecimalAssets(event.assets),
+      transactionHash: receipt.transactionHash.toLowerCase(),
+      confirmedAt: new Date(),
+    },
+    update: {},
+  });
+  await createLifecycleNotification(
+    execution,
+    "POSITION_PRINCIPAL_REPAID",
+    `${formatSixDecimalAssets(event.assets)} pUSD reduced your margin principal.`,
+  );
+  return getPolymarketPositionControls(execution.positionId, input.userId);
+}
+
 export async function monitorPolymarketPositionLifecycles(limit = 25) {
   if (!env.polymarketLifecycleEnabled) {
     return { enabled: false, inspected: 0, triggered: 0, results: [] };
@@ -611,6 +851,24 @@ async function assessOpenExecution(execution: ExecutionWithPosition) {
   if (Date.now() >= policy.mandatoryCloseAt.getTime()) {
     await createSystemCloseAttempt(execution, PolymarketCloseReason.MANDATORY, quote, false);
     return "MANDATORY";
+  }
+
+  const executableExitPrice = Number(quote.depthFloorPrice);
+  if (
+    execution.stopLossPrice &&
+    Number.isFinite(executableExitPrice) &&
+    executableExitPrice <= Number(execution.stopLossPrice)
+  ) {
+    await createSystemCloseAttempt(execution, PolymarketCloseReason.STOP_LOSS, quote, false);
+    return "STOP_LOSS";
+  }
+  if (
+    execution.takeProfitPrice &&
+    Number.isFinite(executableExitPrice) &&
+    executableExitPrice >= Number(execution.takeProfitPrice)
+  ) {
+    await createSystemCloseAttempt(execution, PolymarketCloseReason.TAKE_PROFIT, quote, false);
+    return "TAKE_PROFIT";
   }
 
   const loan = await readLoan(execution.vaultAddress, requiredLoanId(execution));
@@ -989,6 +1247,16 @@ export async function getPolymarketExecutionReadiness() {
         missing.push("Protocol reserve coverage is below POLYMARKET_MIN_RESERVE_BPS.");
       }
       if (uncoveredBadDebt > 0n) missing.push("Vault reports uncovered bad debt.");
+      if (env.polymarketActiveRepayEnabled) {
+        const repaymentVersion = await publicClient.readContract({
+          abi: vaultAbi,
+          address: vault,
+          functionName: "ACTIVE_REPAYMENT_VERSION",
+        });
+        if (repaymentVersion !== activeRepaymentVersion) {
+          missing.push("Polygon vault does not match the active repayment implementation.");
+        }
+      }
 
       const [clobOk, clobVersion] = await Promise.all([
         fetch(new URL("/ok", env.polymarketClobApiUrl), {
@@ -2525,6 +2793,85 @@ function serializeCloseTypedData(value: ReturnType<typeof buildCloseTypedData>) 
   };
 }
 
+function buildRiskControlTypedData(
+  execution: ExecutionWithPosition,
+  input: {
+    stopLossPrice: string | null;
+    takeProfitPrice: string | null;
+    nonce: string;
+    deadline: number;
+  },
+) {
+  return {
+    domain: {
+      name: "Conviction Markets Risk Controls",
+      version: "1",
+      chainId: polygonChainId,
+      verifyingContract: execution.vaultAddress as Address,
+    },
+    primaryType: "RiskControlAuthorization" as const,
+    types: riskControlAuthorizationTypes,
+    message: {
+      positionId: objectIdBytes32(execution.positionId),
+      loanId: requiredLoanId(execution),
+      stopLossPrice: input.stopLossPrice
+        ? parseSixDecimalAssets(input.stopLossPrice, "stopLossPrice")
+        : 0n,
+      takeProfitPrice: input.takeProfitPrice
+        ? parseSixDecimalAssets(input.takeProfitPrice, "takeProfitPrice")
+        : 0n,
+      nonce: input.nonce as Hex,
+      deadline: BigInt(input.deadline),
+    },
+  };
+}
+
+function serializeTypedData(value: ReturnType<typeof buildRiskControlTypedData>) {
+  return {
+    ...value,
+    message: Object.fromEntries(
+      Object.entries(value.message).map(([key, item]) => [
+        key,
+        typeof item === "bigint" ? item.toString() : item,
+      ]),
+    ),
+  };
+}
+
+function assertRiskControlsCanChange(
+  execution: ExecutionWithPosition,
+  nonce: string,
+  deadline: number,
+) {
+  if (execution.state !== PolymarketMarginExecutionState.OPEN || !execution.loanId) {
+    throw new AppError("Risk controls can only be changed on an open position", {
+      code: "POSITION_NOT_OPEN",
+      statusCode: 422,
+    });
+  }
+  const now = Math.floor(Date.now() / 1_000);
+  if (
+    !/^0x[a-fA-F0-9]{64}$/.test(nonce) ||
+    !Number.isInteger(deadline) ||
+    deadline <= now ||
+    deadline > now + 15 * 60
+  ) {
+    throw new AppError("Risk-control nonce or deadline is outside policy", {
+      code: "INVALID_EXIT_CONTROLS",
+      statusCode: 422,
+    });
+  }
+}
+
+function assertRiskControlOrder(stopLossPrice: string | null, takeProfitPrice: string | null) {
+  if (stopLossPrice && takeProfitPrice && Number(stopLossPrice) >= Number(takeProfitPrice)) {
+    throw new AppError("Stop-loss must be below take-profit", {
+      code: "INVALID_EXIT_CONTROLS",
+      statusCode: 422,
+    });
+  }
+}
+
 function validateCloseInput(input: PreparePolymarketCloseInput) {
   if (!input.userId || input.idempotencyKey.length < 12 || input.idempotencyKey.length > 160) {
     throw new AppError("A user and bounded close idempotency key are required", {
@@ -2859,6 +3206,36 @@ function parseLoanReserved(logs: Log[], vaultAddress: string) {
     }
   }
   return null;
+}
+
+function parsePrincipalRepayment(logs: Log[], vaultAddress: string) {
+  for (const log of logs) {
+    if (log.address.toLowerCase() !== vaultAddress.toLowerCase()) continue;
+    try {
+      const decoded = decodeEventLog({
+        abi: [loanPrincipalRepaidEvent],
+        data: log.data,
+        topics: log.topics,
+      });
+      if (decoded.eventName !== "LoanPrincipalRepaid") continue;
+      return decoded.args;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function optionalProbability(value: string | null, field: string) {
+  if (value === null || value.trim() === "") return null;
+  const units = parseSixDecimalAssets(value, field);
+  if (units === 0n || units >= 1_000_000n) {
+    throw new AppError(`${field} must be above 0 and below 1`, {
+      code: "INVALID_EXIT_CONTROLS",
+      statusCode: 422,
+    });
+  }
+  return formatSixDecimalAssets(units);
 }
 
 function assertReservationMatches(

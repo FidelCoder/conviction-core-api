@@ -15,6 +15,18 @@
 8. Keep normal production fills disabled until a complete canary passes. Only
    then set `POLYMARKET_CANARY_PASSED=true` and require readiness `READY`.
 
+## Active Principal Repayment
+
+`POLYMARKET_ACTIVE_REPAY_ENABLED` must remain `false` until the configured Polygon vault is a
+deployment of `PolygonPusdLiquidityVault` containing `repayLoanPrincipal(bytes32,uint256)`.
+After deployment, verify the contract source, run the repayment accounting test against the exact
+artifact, update `POLYMARKET_PUSD_VAULT_ADDRESS`, and only then set the flag to `true`. The endpoint
+reduces principal and exposure atomically; it must never be enabled against an older vault.
+
+Stop-loss and take-profit controls are best-effort lifecycle instructions. Keep the lifecycle
+monitor scheduled and alerting before exposing them. They do not guarantee an exit price during
+gaps, thin depth, venue outages, or resolution.
+
 ## Reconciliation
 
 Each call advances at most one external side-effect stage per execution. Invoke one of:

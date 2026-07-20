@@ -70,6 +70,7 @@ const envSchema = z.object({
   POLYMARKET_GUARDIAN_ADDRESS: optionalEvmAddress,
   POLYMARKET_RISK_MANAGER_ADDRESS: optionalEvmAddress,
   POLYMARKET_LIFECYCLE_ENABLED: optionalBoolean.default(false),
+  POLYMARKET_ACTIVE_REPAY_ENABLED: optionalBoolean.default(false),
   POLYMARKET_CANARY_PASSED: optionalBoolean.default(false),
   POLYMARKET_CANARY_MAX_ASSETS: z
     .string()
@@ -160,6 +161,7 @@ export const env = {
   polymarketGuardianAddress: parsedEnv.data.POLYMARKET_GUARDIAN_ADDRESS ?? null,
   polymarketRiskManagerAddress: parsedEnv.data.POLYMARKET_RISK_MANAGER_ADDRESS ?? null,
   polymarketLifecycleEnabled: parsedEnv.data.POLYMARKET_LIFECYCLE_ENABLED,
+  polymarketActiveRepayEnabled: parsedEnv.data.POLYMARKET_ACTIVE_REPAY_ENABLED,
   polymarketCanaryPassed: parsedEnv.data.POLYMARKET_CANARY_PASSED,
   polymarketCanaryMaxAssets: parsedEnv.data.POLYMARKET_CANARY_MAX_ASSETS,
   polymarketDirectLiquidationMaxAssets: parsedEnv.data.POLYMARKET_DIRECT_LIQUIDATION_MAX_ASSETS,
