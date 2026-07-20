@@ -13,6 +13,7 @@
     "build": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
+    "test": "node --import tsx --test tests/*.test.ts",
     "format:check": "prettier --check .",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",

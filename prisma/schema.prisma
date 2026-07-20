@@ -22,6 +22,30 @@ enum AuthProvider {
   UNKNOWN
 }
 
+enum PolymarketWalletType {
+  EOA
+  POLY_PROXY
+  GNOSIS_SAFE
+  POLY_1271
+}
+
+enum PolymarketAccountStatus {
+  LINKED
+  READY
+  DISCONNECTED
+  ERROR
+}
+
+enum PolymarketChallengePurpose {
+  LINK
+  UNLINK
+}
+
+enum PolymarketPositionState {
+  OPEN
+  CLOSED
+}
+
 enum UsageEventType {
   PAGE_VIEW
   HEARTBEAT
@@ -173,6 +197,8 @@ model User {
   isInternal           Boolean               @default(false)
   acquisitionSource    String?
   socialAccounts       SocialAccount[]
+  polymarketAccounts   PolymarketAccount[]
+  polymarketChallenges PolymarketLinkChallenge[]
   traderProfile        TraderProfile?
   positions            Position[]
   copiedTrades         CopyTrade[]           @relation("CopyTradeFollower")
@@ -223,6 +249,92 @@ model SocialAccount {
   @@index([userId])
   @@index([authProvider])
   @@index([lastSeenAt])
+}
+
+model PolymarketAccount {
+  id                    String                      @id @default(auto()) @map("_id") @db.ObjectId
+  userId                String                      @db.ObjectId
+  ownerAddress          String
+  funderAddress         String                      @unique
+  walletType            PolymarketWalletType
+  chainId               Int                         @default(137)
+  status                PolymarketAccountStatus     @default(LINKED)
+  credentialsCiphertext String?
+  credentialsVerifiedAt DateTime?
+  profileName           String?
+  profileUrl            String?
+  linkedAt              DateTime                    @default(now())
+  walletVerifiedAt      DateTime?
+  disconnectedAt        DateTime?
+  lastSyncedAt          DateTime?
+  lastSyncError         String?
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+  user                  User                        @relation(fields: [userId], references: [id], onDelete: NoAction)
+  positions             PolymarketPositionSnapshot[]
+  challenges            PolymarketLinkChallenge[]
+
+  @@index([userId])
+  @@index([ownerAddress])
+  @@index([status])
+  @@index([lastSyncedAt])
+}
+
+model PolymarketLinkChallenge {
+  id                      String                     @id @default(auto()) @map("_id") @db.ObjectId
+  userId                  String                     @db.ObjectId
+  accountId               String?                    @db.ObjectId
+  purpose                 PolymarketChallengePurpose
+  convictionAddress       String
+  convictionChainId       Int
+  polymarketOwnerAddress  String
+  polymarketFunderAddress String
+  polymarketWalletType    PolymarketWalletType
+  nonce                   String                     @unique
+  message                 String
+  expiresAt               DateTime
+  consumedAt              DateTime?
+  createdAt               DateTime                   @default(now())
+  user                    User                       @relation(fields: [userId], references: [id], onDelete: NoAction)
+  account                 PolymarketAccount?         @relation(fields: [accountId], references: [id], onDelete: NoAction)
+
+  @@index([userId])
+  @@index([accountId])
+  @@index([purpose])
+  @@index([expiresAt])
+}
+
+model PolymarketPositionSnapshot {
+  id           String                    @id @default(auto()) @map("_id") @db.ObjectId
+  accountId    String                    @db.ObjectId
+  assetId      String
+  conditionId  String?
+  state        PolymarketPositionState
+  outcome      String?
+  size         String?
+  averagePrice String?
+  initialValue String?
+  currentValue String?
+  cashPnl      String?
+  realizedPnl  String?
+  currentPrice String?
+  title        String?
+  slug         String?
+  iconUrl      String?
+  eventSlug    String?
+  endDate      DateTime?
+  redeemable   Boolean                   @default(false)
+  mergeable    Boolean                   @default(false)
+  raw          Json?
+  lastSyncedAt DateTime                  @default(now())
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  account      PolymarketAccount         @relation(fields: [accountId], references: [id], onDelete: NoAction)
+
+  @@unique([accountId, assetId, state])
+  @@index([accountId])
+  @@index([conditionId])
+  @@index([state])
 }
 
 model TraderProfile {

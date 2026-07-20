@@ -57,7 +57,10 @@ DATABASE_URL=mongodb+srv://<username>:<password>@<cluster-url>/conviction_market
 NODE_ENV=production
 LOG_LEVEL=info
 POLYMARKET_GAMMA_API_URL=https://gamma-api.polymarket.com
+POLYMARKET_DATA_API_URL=https://data-api.polymarket.com
 POLYMARKET_MARKETS_SYNC_LIMIT=50
+POLYGON_RPC_URL=https://<production-polygon-rpc>
+POLYMARKET_CREDENTIALS_ENCRYPTION_KEY=<32-byte-base64-or-64-character-hex-key>
 ```
 
 Deployment checklist:
@@ -68,7 +71,10 @@ vercel env add DATABASE_URL production
 vercel env add NODE_ENV production
 vercel env add LOG_LEVEL production
 vercel env add POLYMARKET_GAMMA_API_URL production
+vercel env add POLYMARKET_DATA_API_URL production
 vercel env add POLYMARKET_MARKETS_SYNC_LIMIT production
+vercel env add POLYGON_RPC_URL production
+vercel env add POLYMARKET_CREDENTIALS_ENCRYPTION_KEY production
 npm run db:generate
 npm run build
 npm run lint
@@ -87,6 +93,12 @@ If Vercel returns an authentication page, disable deployment protection for the 
 ## HTTP
 
 - `GET /health` returns API health status.
+- `GET /users/:userId/polymarket/accounts` returns linked accounts and imported public position snapshots without exposing credentials.
+- `POST /users/:userId/polymarket/link-challenges` creates a ten-minute, single-use ownership challenge.
+- `POST /users/:userId/polymarket/accounts` verifies both wallet signatures and links an account without replacing the existing Conviction user or profile.
+- `POST /users/:userId/polymarket/accounts/:accountId/sync` refreshes current and closed Polymarket position snapshots.
+- `POST /users/:userId/polymarket/accounts/:accountId/unlink-challenges` creates a signed unlink challenge.
+- `DELETE /users/:userId/polymarket/accounts/:accountId` consumes the unlink challenge, removes stored credentials, and preserves Conviction history.
 - `GET /execution/capabilities` returns the current execution capability contract for clients.
 - `POST /execution/positions/:positionId/start` records an execution attempt and blocks it while adapters/contracts are not live.
 - `GET /contracts/config` lists stored contract deployments.
