@@ -6,8 +6,13 @@ import { AppError } from "../lib/errors.js";
 import { sendSuccess } from "../lib/responses.js";
 import { PolymarketProvider } from "../providers/polymarket/index.js";
 import { syncMarketsFromProvider } from "../services/markets.js";
+import { reconcilePendingPolymarketExecutions } from "../services/polymarket-execution-orchestrator.js";
 
 type MarketSyncQuery = {
+  limit?: string;
+};
+
+type ExecutionReconcileQuery = {
   limit?: string;
 };
 
@@ -40,6 +45,43 @@ export async function registerOperationsRoutes(app: FastifyInstance) {
       return handleMarketSync(request.headers.authorization, request.query, reply);
     },
   );
+
+  const reconciliationOptions = {
+    schema: {
+      querystring: {
+        type: "object",
+        properties: { limit: { type: "string" } },
+      },
+    },
+  };
+
+  app.post<{ Querystring: ExecutionReconcileQuery }>(
+    "/ops/executions/polymarket/reconcile",
+    reconciliationOptions,
+    async (request, reply) => {
+      return handleExecutionReconciliation(request.headers.authorization, request.query, reply);
+    },
+  );
+
+  app.get<{ Querystring: ExecutionReconcileQuery }>(
+    "/ops/executions/polymarket/reconcile",
+    reconciliationOptions,
+    async (request, reply) => {
+      return handleExecutionReconciliation(request.headers.authorization, request.query, reply);
+    },
+  );
+}
+
+async function handleExecutionReconciliation(
+  authorization: string | undefined,
+  query: ExecutionReconcileQuery,
+  reply: Parameters<typeof sendSuccess>[0],
+) {
+  assertAuthorized(authorization);
+  const limit = parseLimit(query.limit) ?? 10;
+  return sendSuccess(reply, {
+    reconciliation: await reconcilePendingPolymarketExecutions(limit),
+  });
 }
 
 async function handleMarketSync(
@@ -80,7 +122,7 @@ function assertAuthorized(authorization: string | undefined) {
     : "";
 
   if (!allowedTokens.some((allowedToken) => isSameToken(token, allowedToken))) {
-    throw new AppError("Market sync is not authorized", {
+    throw new AppError("Operations request is not authorized", {
       code: "MARKET_SYNC_UNAUTHORIZED",
       statusCode: 401,
     });

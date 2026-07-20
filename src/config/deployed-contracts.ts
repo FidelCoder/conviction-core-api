@@ -55,6 +55,21 @@ export const defaultContractDeployments = [
 
 export const supportedIntentChains = [
   {
+    chainId: 137,
+    chainName: "Polygon",
+    ecosystem: "EVM" as const,
+    network: "mainnet" as const,
+    spotExecutionEnabled: false,
+    marginExecutionEnabled: false,
+    contractRequiredForMargin: true,
+    vaultAddress: null,
+    collateralTokenAddress: "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
+    collateralTokenSymbol: "pUSD",
+    collateralTokenDecimals: 6,
+    walletFlowEnabled: false,
+    plannedAdapters: ["Polymarket CLOB V2", "Isolated pUSD margin custody"],
+  },
+  {
     chainId: 84532,
     chainName: "Base Sepolia",
     ecosystem: "EVM" as const,
