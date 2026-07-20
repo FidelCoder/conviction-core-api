@@ -171,6 +171,12 @@ export async function authorizePolymarketMarginExecution(
     });
   }
   assertFreshQuoteInsideAuthorization(context.tickSize, input, freshDecision.quote);
+  const reservationCalls = buildReservationWalletCalls(context, input, input);
+  const approvalCall = reservationCalls.find((call) => call.id === "approve-pusd");
+  const reservationCall = reservationCalls.find((call) => call.id === "reserve-margin-loan");
+  if (!approvalCall || !reservationCall) {
+    throw new Error("Margin reservation calls could not be constructed");
+  }
 
   try {
     const execution = await prisma.polymarketMarginExecution.create({
@@ -197,6 +203,11 @@ export async function authorizePolymarketMarginExecution(
           priceLimit: input.priceLimit,
           side: context.position.side,
           tokenId: context.tokenId,
+        },
+        responsePayload: {
+          stage: "margin_reservation_required",
+          approvalCall,
+          walletCall: reservationCall,
         },
       },
     });
@@ -331,30 +342,37 @@ function normalizeStageInstruction(value: unknown) {
 
   const instruction: {
     stage: string;
+    approvalCall?: { chainId: number; to: string; value: string; data: string };
     walletCall?: { chainId: number; to: string; value: string; data: string };
   } = { stage: value.stage };
-  const walletCall = value.walletCall;
-
-  if (
-    isJsonRecord(walletCall) &&
-    Number.isInteger(walletCall.chainId) &&
-    Number(walletCall.chainId) > 0 &&
-    typeof walletCall.to === "string" &&
-    isAddress(walletCall.to) &&
-    typeof walletCall.value === "string" &&
-    /^\d+$/.test(walletCall.value) &&
-    typeof walletCall.data === "string" &&
-    /^0x(?:[a-fA-F0-9]{2})*$/.test(walletCall.data)
-  ) {
-    instruction.walletCall = {
-      chainId: Number(walletCall.chainId),
-      to: walletCall.to,
-      value: walletCall.value,
-      data: walletCall.data,
-    };
-  }
+  const walletCall = normalizePublicWalletCall(value.walletCall);
+  const approvalCall = normalizePublicWalletCall(value.approvalCall);
+  if (walletCall) instruction.walletCall = walletCall;
+  if (approvalCall) instruction.approvalCall = approvalCall;
 
   return instruction;
+}
+
+function normalizePublicWalletCall(value: unknown) {
+  if (
+    !isJsonRecord(value) ||
+    !Number.isInteger(value.chainId) ||
+    Number(value.chainId) <= 0 ||
+    typeof value.to !== "string" ||
+    !isAddress(value.to) ||
+    typeof value.value !== "string" ||
+    !/^\d+$/.test(value.value) ||
+    typeof value.data !== "string" ||
+    !/^0x(?:[a-fA-F0-9]{2})*$/.test(value.data)
+  ) {
+    return null;
+  }
+  return {
+    chainId: Number(value.chainId),
+    to: value.to,
+    value: value.value,
+    data: value.data,
+  };
 }
 
 function isJsonRecord(value: unknown): value is Record<string, unknown> {

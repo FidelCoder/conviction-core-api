@@ -33,6 +33,12 @@ test("exposes safe stage instructions without returning execution credentials", 
     },
     responsePayload: {
       stage: "execution_wallet_commit_required",
+      approvalCall: {
+        chainId: 137,
+        to: `0x${"3".repeat(40)}`,
+        value: "0",
+        data: "0xabcd",
+      },
       walletCall: { chainId: 137, to: `0x${"2".repeat(40)}`, value: "0", data: "0x1234" },
       clobCredentials: "must-not-leak",
     },
@@ -61,6 +67,7 @@ test("exposes safe stage instructions without returning execution credentials", 
   });
   assert.deepEqual(normalized.stageInstruction, {
     stage: "execution_wallet_commit_required",
+    approvalCall: { chainId: 137, to: `0x${"3".repeat(40)}`, value: "0", data: "0xabcd" },
     walletCall: { chainId: 137, to: `0x${"2".repeat(40)}`, value: "0", data: "0x1234" },
   });
   assert.equal("sessionSignerCiphertext" in normalized, false);
