@@ -244,6 +244,8 @@ export function normalizePolymarketMarginExecution(execution: {
   actualShares: string | null;
   actualSpentAssets: string | null;
   actualFeeAssets: string | null;
+  requestPayload: unknown;
+  responsePayload: unknown;
   failureCode: string | null;
   failureMessage: string | null;
   reservedAt: Date | null;
@@ -276,6 +278,8 @@ export function normalizePolymarketMarginExecution(execution: {
     actualShares: execution.actualShares,
     actualSpentAssets: execution.actualSpentAssets,
     actualFeeAssets: execution.actualFeeAssets,
+    authorizedTerms: execution.requestPayload,
+    stageInstruction: execution.responsePayload,
     fundingTxHash: "fundingTxHash" in execution ? execution.fundingTxHash : null,
     custodyFundingTxHash:
       "custodyFundingTxHash" in execution ? execution.custodyFundingTxHash : null,
