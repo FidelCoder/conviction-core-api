@@ -5,6 +5,7 @@ import {
   assertPolymarketExecutionTransition,
   calculateFokBuyPriceLimit,
   calculateFokSellPriceLimit,
+  calculatePolymarketPositionHealth,
   canTransitionPolymarketExecution,
   classifyFokPostResult,
   formatSixDecimalAssets,
@@ -57,6 +58,58 @@ test("rounds the FOK worst price upward to the market tick", () => {
 test("rounds the FOK closing floor downward to the market tick", () => {
   assert.equal(calculateFokSellPriceLimit("0.501", 100, "0.01"), "0.49");
   assert.equal(calculateFokSellPriceLimit("0.004", 2_000, "0.01"), "0.01");
+});
+
+test("calculates position health from conservative exit proceeds and maintenance", () => {
+  assert.deepEqual(
+    calculatePolymarketPositionHealth({
+      borrowAssets: "70",
+      maintenanceMarginBps: 3_000,
+      minimumExitProceeds: "110",
+    }),
+    {
+      status: "HEALTHY",
+      debtCoverageBps: 15_714,
+      requiredExitProceeds: "100",
+      surplusAssets: "10",
+      shortfallAssets: "0",
+    },
+  );
+  assert.deepEqual(
+    calculatePolymarketPositionHealth({
+      borrowAssets: "70",
+      maintenanceMarginBps: 3_000,
+      minimumExitProceeds: "99.999999",
+    }),
+    {
+      status: "LIQUIDATION_REQUIRED",
+      debtCoverageBps: 14_285,
+      requiredExitProceeds: "100",
+      surplusAssets: "0",
+      shortfallAssets: "0.000001",
+    },
+  );
+});
+
+test("rejects invalid health inputs", () => {
+  assert.throws(
+    () =>
+      calculatePolymarketPositionHealth({
+        borrowAssets: "0",
+        maintenanceMarginBps: 3_000,
+        minimumExitProceeds: "1",
+      }),
+    /positive/,
+  );
+  assert.throws(
+    () =>
+      calculatePolymarketPositionHealth({
+        borrowAssets: "1",
+        maintenanceMarginBps: 10_000,
+        minimumExitProceeds: "1",
+      }),
+    /9999/,
+  );
 });
 
 test("quotes a full-depth FOK close with conservative venue fees", () => {

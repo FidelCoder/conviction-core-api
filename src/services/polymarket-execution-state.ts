@@ -135,6 +135,48 @@ export function formatSixDecimalAssets(value: bigint) {
   return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
+export type PolymarketPositionHealthStatus = "HEALTHY" | "LIQUIDATION_REQUIRED";
+
+export function calculatePolymarketPositionHealth(input: {
+  borrowAssets: string;
+  maintenanceMarginBps: number;
+  minimumExitProceeds: string;
+}) {
+  if (
+    !Number.isInteger(input.maintenanceMarginBps) ||
+    input.maintenanceMarginBps < 0 ||
+    input.maintenanceMarginBps >= 10_000
+  ) {
+    throw new Error("maintenanceMarginBps must be an integer between 0 and 9999");
+  }
+  const borrowAssets = parseSixDecimalAssets(input.borrowAssets, "borrowAssets");
+  const minimumExitProceeds = parseSixDecimalAssets(
+    input.minimumExitProceeds,
+    "minimumExitProceeds",
+  );
+  if (borrowAssets === 0n) throw new Error("borrowAssets must be positive");
+
+  const maintenanceDenominator = 10_000n - BigInt(input.maintenanceMarginBps);
+  const requiredExitProceeds = divideUp(borrowAssets * 10_000n, maintenanceDenominator);
+  const healthy = minimumExitProceeds >= requiredExitProceeds;
+  const debtCoverageBps = (minimumExitProceeds * 10_000n) / borrowAssets;
+
+  return {
+    status: (healthy ? "HEALTHY" : "LIQUIDATION_REQUIRED") as PolymarketPositionHealthStatus,
+    debtCoverageBps:
+      debtCoverageBps > BigInt(Number.MAX_SAFE_INTEGER)
+        ? Number.MAX_SAFE_INTEGER
+        : Number(debtCoverageBps),
+    requiredExitProceeds: formatSixDecimalAssets(requiredExitProceeds),
+    surplusAssets: healthy
+      ? formatSixDecimalAssets(minimumExitProceeds - requiredExitProceeds)
+      : "0",
+    shortfallAssets: healthy
+      ? "0"
+      : formatSixDecimalAssets(requiredExitProceeds - minimumExitProceeds),
+  };
+}
+
 export function calculateFokBuyPriceLimit(
   openingPrice: string,
   maxSlippageBps: number,
