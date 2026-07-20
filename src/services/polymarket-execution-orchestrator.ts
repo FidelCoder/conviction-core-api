@@ -92,6 +92,16 @@ const closeAuthorizationTypes = {
     { name: "deadline", type: "uint256" },
   ],
 } as const;
+const riskControlAuthorizationTypes = {
+  RiskControlAuthorization: [
+    { name: "positionId", type: "bytes32" },
+    { name: "loanId", type: "bytes32" },
+    { name: "stopLossPrice", type: "uint256" },
+    { name: "takeProfitPrice", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+    { name: "deadline", type: "uint256" },
+  ],
+} as const;
 
 const executionRequestSchema = z.object({
   collateralAssets: z.string(),
@@ -491,31 +501,97 @@ export async function getPolymarketPositionControls(positionId: string, userId: 
   };
 }
 
+export async function preparePolymarketPositionControls(input: {
+  positionId: string;
+  userId: string;
+  stopLossPrice: string | null;
+  takeProfitPrice: string | null;
+  nonce: string;
+  deadline: number;
+}) {
+  const execution = await getOwnedExecutionByPosition(input.positionId, input.userId);
+  assertRiskControlsCanChange(execution, input.nonce, input.deadline);
+  const stopLossPrice = optionalProbability(input.stopLossPrice, "stopLossPrice");
+  const takeProfitPrice = optionalProbability(input.takeProfitPrice, "takeProfitPrice");
+  assertRiskControlOrder(stopLossPrice, takeProfitPrice);
+  return {
+    stopLossPrice,
+    takeProfitPrice,
+    typedData: serializeTypedData(
+      buildRiskControlTypedData(execution, {
+        ...input,
+        stopLossPrice,
+        takeProfitPrice,
+      }),
+    ),
+    warning:
+      "Signing stores best-effort exit instructions for this position only. It does not guarantee the trigger or fill price.",
+  };
+}
+
 export async function updatePolymarketPositionControls(input: {
   positionId: string;
   userId: string;
   stopLossPrice: string | null;
   takeProfitPrice: string | null;
+  nonce: string;
+  deadline: number;
+  signature: string;
 }) {
   const execution = await getOwnedExecutionByPosition(input.positionId, input.userId);
-  if (execution.state !== PolymarketMarginExecutionState.OPEN) {
-    throw new AppError("Risk controls can only be changed on an open position", {
-      code: "POSITION_NOT_OPEN",
-      statusCode: 422,
-    });
-  }
+  assertRiskControlsCanChange(execution, input.nonce, input.deadline);
   const stopLossPrice = optionalProbability(input.stopLossPrice, "stopLossPrice");
   const takeProfitPrice = optionalProbability(input.takeProfitPrice, "takeProfitPrice");
-  if (stopLossPrice && takeProfitPrice && Number(stopLossPrice) >= Number(takeProfitPrice)) {
-    throw new AppError("Stop-loss must be below take-profit", {
-      code: "INVALID_EXIT_CONTROLS",
+  assertRiskControlOrder(stopLossPrice, takeProfitPrice);
+  if (!/^0x[a-fA-F0-9]+$/.test(input.signature) || input.signature.length < 132) {
+    throw new AppError("Risk-control signature is malformed", {
+      code: "INVALID_RISK_CONTROL_SIGNATURE",
       statusCode: 422,
     });
   }
-  await prisma.polymarketMarginExecution.update({
-    where: { id: execution.id },
-    data: { stopLossPrice, takeProfitPrice },
+  const typedData = buildRiskControlTypedData(execution, {
+    ...input,
+    stopLossPrice,
+    takeProfitPrice,
   });
+  const signatureValid = await polygonPublicClient().verifyTypedData({
+    address: execution.authorizationSigner as Address,
+    ...typedData,
+    signature: input.signature as Hex,
+  });
+  if (!signatureValid) {
+    throw new AppError("Risk-control signature is invalid", {
+      code: "INVALID_RISK_CONTROL_SIGNATURE",
+      statusCode: 401,
+    });
+  }
+  try {
+    await prisma.$transaction([
+      prisma.polymarketRiskControlAuthorization.create({
+        data: {
+          executionId: execution.id,
+          authorizationNonce: input.nonce.toLowerCase(),
+          authorizationDeadline: new Date(input.deadline * 1_000),
+          authorizationSigner: execution.authorizationSigner,
+          authorizationSignature: input.signature,
+          stopLossPrice,
+          takeProfitPrice,
+        },
+      }),
+      prisma.polymarketMarginExecution.update({
+        where: { id: execution.id },
+        data: { stopLossPrice, takeProfitPrice },
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new AppError("Risk-control authorization nonce was already used", {
+        code: "RISK_CONTROL_AUTHORIZATION_REPLAY",
+        statusCode: 409,
+      });
+    }
+    throw error;
+  }
   return getPolymarketPositionControls(input.positionId, input.userId);
 }
 
@@ -2715,6 +2791,85 @@ function serializeCloseTypedData(value: ReturnType<typeof buildCloseTypedData>) 
       ]),
     ),
   };
+}
+
+function buildRiskControlTypedData(
+  execution: ExecutionWithPosition,
+  input: {
+    stopLossPrice: string | null;
+    takeProfitPrice: string | null;
+    nonce: string;
+    deadline: number;
+  },
+) {
+  return {
+    domain: {
+      name: "Conviction Markets Risk Controls",
+      version: "1",
+      chainId: polygonChainId,
+      verifyingContract: execution.vaultAddress as Address,
+    },
+    primaryType: "RiskControlAuthorization" as const,
+    types: riskControlAuthorizationTypes,
+    message: {
+      positionId: objectIdBytes32(execution.positionId),
+      loanId: requiredLoanId(execution),
+      stopLossPrice: input.stopLossPrice
+        ? parseSixDecimalAssets(input.stopLossPrice, "stopLossPrice")
+        : 0n,
+      takeProfitPrice: input.takeProfitPrice
+        ? parseSixDecimalAssets(input.takeProfitPrice, "takeProfitPrice")
+        : 0n,
+      nonce: input.nonce as Hex,
+      deadline: BigInt(input.deadline),
+    },
+  };
+}
+
+function serializeTypedData(value: ReturnType<typeof buildRiskControlTypedData>) {
+  return {
+    ...value,
+    message: Object.fromEntries(
+      Object.entries(value.message).map(([key, item]) => [
+        key,
+        typeof item === "bigint" ? item.toString() : item,
+      ]),
+    ),
+  };
+}
+
+function assertRiskControlsCanChange(
+  execution: ExecutionWithPosition,
+  nonce: string,
+  deadline: number,
+) {
+  if (execution.state !== PolymarketMarginExecutionState.OPEN || !execution.loanId) {
+    throw new AppError("Risk controls can only be changed on an open position", {
+      code: "POSITION_NOT_OPEN",
+      statusCode: 422,
+    });
+  }
+  const now = Math.floor(Date.now() / 1_000);
+  if (
+    !/^0x[a-fA-F0-9]{64}$/.test(nonce) ||
+    !Number.isInteger(deadline) ||
+    deadline <= now ||
+    deadline > now + 15 * 60
+  ) {
+    throw new AppError("Risk-control nonce or deadline is outside policy", {
+      code: "INVALID_EXIT_CONTROLS",
+      statusCode: 422,
+    });
+  }
+}
+
+function assertRiskControlOrder(stopLossPrice: string | null, takeProfitPrice: string | null) {
+  if (stopLossPrice && takeProfitPrice && Number(stopLossPrice) >= Number(takeProfitPrice)) {
+    throw new AppError("Stop-loss must be below take-profit", {
+      code: "INVALID_EXIT_CONTROLS",
+      statusCode: 422,
+    });
+  }
 }
 
 function validateCloseInput(input: PreparePolymarketCloseInput) {

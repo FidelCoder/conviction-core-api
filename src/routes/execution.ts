@@ -21,6 +21,7 @@ import {
   getPolymarketExecutionReadiness,
   getPolymarketPositionControls,
   preparePolymarketPositionClose,
+  preparePolymarketPositionControls,
   preparePolymarketPrincipalRepayment,
   recordPolymarketPrincipalRepayment,
   recordPolymarketExecutionWalletCommit,
@@ -183,7 +184,14 @@ export async function registerExecutionRoutes(app: FastifyInstance) {
 
   app.put<{
     Params: PositionExecutionParams;
-    Body: { userId: string; stopLossPrice: string | null; takeProfitPrice: string | null };
+    Body: {
+      userId: string;
+      stopLossPrice: string | null;
+      takeProfitPrice: string | null;
+      nonce: string;
+      deadline: number;
+      signature: string;
+    };
   }>(
     "/execution/positions/:positionId/polymarket/controls",
     {
@@ -191,12 +199,22 @@ export async function registerExecutionRoutes(app: FastifyInstance) {
         params: positionParamsSchema,
         body: {
           type: "object",
-          required: ["userId", "stopLossPrice", "takeProfitPrice"],
+          required: [
+            "userId",
+            "stopLossPrice",
+            "takeProfitPrice",
+            "nonce",
+            "deadline",
+            "signature",
+          ],
           additionalProperties: false,
           properties: {
             userId: { type: "string", minLength: 1 },
             stopLossPrice: { ...decimalSchema, nullable: true },
             takeProfitPrice: { ...decimalSchema, nullable: true },
+            nonce: { type: "string", pattern: "^0x[a-fA-F0-9]{64}$" },
+            deadline: { type: "integer" },
+            signature: { type: "string", pattern: "^0x[a-fA-F0-9]+$" },
           },
         },
       },
@@ -204,6 +222,44 @@ export async function registerExecutionRoutes(app: FastifyInstance) {
     async (request, reply) => {
       return sendSuccess(reply, {
         controls: await updatePolymarketPositionControls({
+          positionId: request.params.positionId,
+          ...request.body,
+        }),
+      });
+    },
+  );
+
+  app.post<{
+    Params: PositionExecutionParams;
+    Body: {
+      userId: string;
+      stopLossPrice: string | null;
+      takeProfitPrice: string | null;
+      nonce: string;
+      deadline: number;
+    };
+  }>(
+    "/execution/positions/:positionId/polymarket/controls/prepare",
+    {
+      schema: {
+        params: positionParamsSchema,
+        body: {
+          type: "object",
+          required: ["userId", "stopLossPrice", "takeProfitPrice", "nonce", "deadline"],
+          additionalProperties: false,
+          properties: {
+            userId: { type: "string", minLength: 1 },
+            stopLossPrice: { ...decimalSchema, nullable: true },
+            takeProfitPrice: { ...decimalSchema, nullable: true },
+            nonce: { type: "string", pattern: "^0x[a-fA-F0-9]{64}$" },
+            deadline: { type: "integer" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      return sendSuccess(reply, {
+        prepared: await preparePolymarketPositionControls({
           positionId: request.params.positionId,
           ...request.body,
         }),

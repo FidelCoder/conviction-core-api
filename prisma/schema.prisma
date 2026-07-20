@@ -571,6 +571,7 @@ model PolymarketMarginExecution {
   position                  Position                       @relation(fields: [positionId], references: [id], onDelete: NoAction)
   closeAttempts             PolymarketCloseAttempt[]
   debtRepayments            PolymarketDebtRepayment[]
+  riskControlAuthorizations PolymarketRiskControlAuthorization[]
 
   @@index([state])
   @@index([authorizationSigner])
@@ -590,6 +591,22 @@ model PolymarketDebtRepayment {
 
   @@index([executionId])
   @@index([userId])
+}
+
+model PolymarketRiskControlAuthorization {
+  id                     String                    @id @default(auto()) @map("_id") @db.ObjectId
+  executionId            String                    @db.ObjectId
+  authorizationNonce     String                    @unique
+  authorizationDeadline  DateTime
+  authorizationSigner    String
+  authorizationSignature String
+  stopLossPrice          String?
+  takeProfitPrice        String?
+  createdAt              DateTime                  @default(now())
+  execution              PolymarketMarginExecution @relation(fields: [executionId], references: [id], onDelete: NoAction)
+
+  @@index([executionId])
+  @@index([createdAt])
 }
 
 model PolymarketCloseAttempt {
