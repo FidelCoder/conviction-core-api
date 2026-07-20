@@ -2194,6 +2194,7 @@ async function markExecutionOpen(execution: ExecutionWithPosition) {
       where: { id: execution.positionId },
       data: {
         status: PositionStatus.EXECUTED,
+        quantity: requiredText(execution.actualShares, "actualShares"),
         averageEntryPrice: execution.actualFillPrice,
         executionAdapterId: "POLYMARKET_CLOB_V2_ISOLATED",
         openedAt: new Date(),

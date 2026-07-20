@@ -244,6 +244,8 @@ export function normalizePolymarketMarginExecution(execution: {
   actualShares: string | null;
   actualSpentAssets: string | null;
   actualFeeAssets: string | null;
+  requestPayload: unknown;
+  responsePayload: unknown;
   failureCode: string | null;
   failureMessage: string | null;
   reservedAt: Date | null;
@@ -276,6 +278,8 @@ export function normalizePolymarketMarginExecution(execution: {
     actualShares: execution.actualShares,
     actualSpentAssets: execution.actualSpentAssets,
     actualFeeAssets: execution.actualFeeAssets,
+    authorizedTerms: normalizeAuthorizedTerms(execution.requestPayload),
+    stageInstruction: normalizeStageInstruction(execution.responsePayload),
     fundingTxHash: "fundingTxHash" in execution ? execution.fundingTxHash : null,
     custodyFundingTxHash:
       "custodyFundingTxHash" in execution ? execution.custodyFundingTxHash : null,
@@ -297,6 +301,62 @@ export function normalizePolymarketMarginExecution(execution: {
     createdAt: execution.createdAt.toISOString(),
     updatedAt: execution.updatedAt.toISOString(),
   };
+}
+
+function normalizeAuthorizedTerms(value: unknown) {
+  if (!isJsonRecord(value)) return {};
+
+  return Object.fromEntries(
+    [
+      "collateralAssets",
+      "borrowAssets",
+      "leverageBps",
+      "minimumOutcomeShares",
+      "financingFeeAssets",
+      "priceLimit",
+      "side",
+      "tokenId",
+    ]
+      .map((key) => [key, value[key]] as const)
+      .filter((entry): entry is readonly [string, string | number] => {
+        return typeof entry[1] === "string" || typeof entry[1] === "number";
+      }),
+  );
+}
+
+function normalizeStageInstruction(value: unknown) {
+  if (!isJsonRecord(value) || typeof value.stage !== "string") return null;
+
+  const instruction: {
+    stage: string;
+    walletCall?: { chainId: number; to: string; value: string; data: string };
+  } = { stage: value.stage };
+  const walletCall = value.walletCall;
+
+  if (
+    isJsonRecord(walletCall) &&
+    Number.isInteger(walletCall.chainId) &&
+    Number(walletCall.chainId) > 0 &&
+    typeof walletCall.to === "string" &&
+    isAddress(walletCall.to) &&
+    typeof walletCall.value === "string" &&
+    /^\d+$/.test(walletCall.value) &&
+    typeof walletCall.data === "string" &&
+    /^0x(?:[a-fA-F0-9]{2})*$/.test(walletCall.data)
+  ) {
+    instruction.walletCall = {
+      chainId: Number(walletCall.chainId),
+      to: walletCall.to,
+      value: walletCall.value,
+      data: walletCall.data,
+    };
+  }
+
+  return instruction;
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function getAuthorizationContext(positionId: string, userId: string) {
