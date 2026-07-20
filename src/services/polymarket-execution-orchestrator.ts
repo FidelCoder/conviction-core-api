@@ -199,13 +199,7 @@ export async function recordPolymarketLoanReservation(input: {
     if (execution.loanId) return normalizePolymarketMarginExecution(execution);
     throw invalidState(execution.state, "record a reservation");
   }
-  if (execution.authorizationDeadline.getTime() <= Date.now()) {
-    throw new AppError("Execution authorization expired before reservation", {
-      code: "MARGIN_EXECUTION_AUTHORIZATION_EXPIRED",
-      statusCode: 409,
-    });
-  }
-
+  // A successful reserveLoan receipt proves the vault enforced the signed deadline at inclusion.
   const publicClient = polygonPublicClient();
   const receipt = await publicClient.waitForTransactionReceipt({
     hash: input.transactionHash.toLowerCase() as Hex,
