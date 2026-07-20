@@ -106,6 +106,23 @@ enum ExecutionAttemptStatus {
   CANCELLED
 }
 
+enum PolymarketMarginExecutionState {
+  AUTHORIZED
+  RESERVED
+  WALLET_DEPLOYING
+  FUNDED
+  ORDER_PREPARED
+  ORDER_SUBMITTED
+  FILL_CONFIRMED
+  SECURED
+  OPEN
+  CLOSING
+  CLOSED
+  CANCELLED
+  FAILED
+  RECONCILIATION_REQUIRED
+}
+
 enum MarginMarketPolicyStatus {
   DRAFT
   APPROVED
@@ -192,44 +209,44 @@ enum OmnistonQuoteStatus {
 }
 
 model User {
-  id                   String                @id @default(auto()) @map("_id") @db.ObjectId
-  displayName          String?
-  email                String?
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
-  firstSeenAt          DateTime?
-  lastSeenAt           DateTime?
-  sessionCount         Int                   @default(0)
-  isInternal           Boolean               @default(false)
-  acquisitionSource    String?
-  socialAccounts       SocialAccount[]
-  polymarketAccounts   PolymarketAccount[]
-  polymarketChallenges PolymarketLinkChallenge[]
-  traderProfile        TraderProfile?
-  positions            Position[]
-  copiedTrades         CopyTrade[]           @relation("CopyTradeFollower")
-  tradingRooms         TradingRoom[]         @relation("TradingRoomOwner")
-  contractTransactions ContractTransaction[]
-  signalReplies        SignalReply[]
-  signalReactions      SignalReaction[]
-  signalBookmarks      SignalBookmark[]
-  pulsePosts           PulsePost[]
-  pulsePostReplies     PulsePostReply[]
-  pulsePostReactions   PulsePostReaction[]
-  pulsePostBookmarks   PulsePostBookmark[]
-  followingUsers       UserFollow[]          @relation("UserFollowFollower")
-  followerUsers        UserFollow[]          @relation("UserFollowFollowing")
-  notifications        UserNotification[]    @relation("NotificationRecipient")
-  triggeredNotifications UserNotification[]  @relation("NotificationActor")
-  positionReplies      PositionReply[]
-  preference           UserPreference?
-  supportTickets       SupportTicket[]
-  supportReplies       SupportTicketReply[]
-  activityMediaItems   ActivityMediaItem[]
-  omnistonQuoteEvents  OmnistonQuoteEvent[]
-  tonVaultIntents      TonVaultIntent[]
-  usageSessions        UsageSession[]
-  usageEvents          UsageEvent[]
+  id                     String                    @id @default(auto()) @map("_id") @db.ObjectId
+  displayName            String?
+  email                  String?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  firstSeenAt            DateTime?
+  lastSeenAt             DateTime?
+  sessionCount           Int                       @default(0)
+  isInternal             Boolean                   @default(false)
+  acquisitionSource      String?
+  socialAccounts         SocialAccount[]
+  polymarketAccounts     PolymarketAccount[]
+  polymarketChallenges   PolymarketLinkChallenge[]
+  traderProfile          TraderProfile?
+  positions              Position[]
+  copiedTrades           CopyTrade[]               @relation("CopyTradeFollower")
+  tradingRooms           TradingRoom[]             @relation("TradingRoomOwner")
+  contractTransactions   ContractTransaction[]
+  signalReplies          SignalReply[]
+  signalReactions        SignalReaction[]
+  signalBookmarks        SignalBookmark[]
+  pulsePosts             PulsePost[]
+  pulsePostReplies       PulsePostReply[]
+  pulsePostReactions     PulsePostReaction[]
+  pulsePostBookmarks     PulsePostBookmark[]
+  followingUsers         UserFollow[]              @relation("UserFollowFollower")
+  followerUsers          UserFollow[]              @relation("UserFollowFollowing")
+  notifications          UserNotification[]        @relation("NotificationRecipient")
+  triggeredNotifications UserNotification[]        @relation("NotificationActor")
+  positionReplies        PositionReply[]
+  preference             UserPreference?
+  supportTickets         SupportTicket[]
+  supportReplies         SupportTicketReply[]
+  activityMediaItems     ActivityMediaItem[]
+  omnistonQuoteEvents    OmnistonQuoteEvent[]
+  tonVaultIntents        TonVaultIntent[]
+  usageSessions          UsageSession[]
+  usageEvents            UsageEvent[]
 }
 
 model SocialAccount {
@@ -258,25 +275,25 @@ model SocialAccount {
 }
 
 model PolymarketAccount {
-  id                    String                      @id @default(auto()) @map("_id") @db.ObjectId
-  userId                String                      @db.ObjectId
+  id                    String                       @id @default(auto()) @map("_id") @db.ObjectId
+  userId                String                       @db.ObjectId
   ownerAddress          String
-  funderAddress         String                      @unique
+  funderAddress         String                       @unique
   walletType            PolymarketWalletType
-  chainId               Int                         @default(137)
-  status                PolymarketAccountStatus     @default(LINKED)
+  chainId               Int                          @default(137)
+  status                PolymarketAccountStatus      @default(LINKED)
   credentialsCiphertext String?
   credentialsVerifiedAt DateTime?
   profileName           String?
   profileUrl            String?
-  linkedAt              DateTime                    @default(now())
+  linkedAt              DateTime                     @default(now())
   walletVerifiedAt      DateTime?
   disconnectedAt        DateTime?
   lastSyncedAt          DateTime?
   lastSyncError         String?
-  createdAt             DateTime                    @default(now())
-  updatedAt             DateTime                    @updatedAt
-  user                  User                        @relation(fields: [userId], references: [id], onDelete: NoAction)
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+  user                  User                         @relation(fields: [userId], references: [id], onDelete: NoAction)
   positions             PolymarketPositionSnapshot[]
   challenges            PolymarketLinkChallenge[]
 
@@ -311,8 +328,8 @@ model PolymarketLinkChallenge {
 }
 
 model PolymarketPositionSnapshot {
-  id           String                    @id @default(auto()) @map("_id") @db.ObjectId
-  accountId    String                    @db.ObjectId
+  id           String                  @id @default(auto()) @map("_id") @db.ObjectId
+  accountId    String                  @db.ObjectId
   assetId      String
   conditionId  String?
   state        PolymarketPositionState
@@ -329,13 +346,13 @@ model PolymarketPositionSnapshot {
   iconUrl      String?
   eventSlug    String?
   endDate      DateTime?
-  redeemable   Boolean                   @default(false)
-  mergeable    Boolean                   @default(false)
+  redeemable   Boolean                 @default(false)
+  mergeable    Boolean                 @default(false)
   raw          Json?
-  lastSyncedAt DateTime                  @default(now())
-  createdAt    DateTime                  @default(now())
-  updatedAt    DateTime                  @updatedAt
-  account      PolymarketAccount         @relation(fields: [accountId], references: [id], onDelete: NoAction)
+  lastSyncedAt DateTime                @default(now())
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+  account      PolymarketAccount       @relation(fields: [accountId], references: [id], onDelete: NoAction)
 
   @@unique([accountId, assetId, state])
   @@index([accountId])
@@ -356,13 +373,13 @@ model TraderProfile {
 }
 
 model Market {
-  id                    String        @id @default(auto()) @map("_id") @db.ObjectId
+  id                    String              @id @default(auto()) @map("_id") @db.ObjectId
   externalMarketId      String
   source                MarketSource
   title                 String
   description           String?
   category              String?
-  status                MarketStatus  @default(ACTIVE)
+  status                MarketStatus        @default(ACTIVE)
   resolutionDate        DateTime?
   externalUrl           String?
   yesTokenId            String?
@@ -371,8 +388,8 @@ model Market {
   conditionId           String?
   questionId            String?
   negativeRisk          Boolean?
-  orderBookEnabled      Boolean       @default(false)
-  acceptingOrders       Boolean       @default(false)
+  orderBookEnabled      Boolean             @default(false)
+  acceptingOrders       Boolean             @default(false)
   orderPriceMinTickSize String?
   orderMinSize          String?
   lastTradePrice        String?
@@ -380,8 +397,8 @@ model Market {
   bestAsk               String?
   providerMetadata      String?
   syncedAt              DateTime?
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
   positions             Position[]
   signals               TradeSignal[]
   activityMediaItems    ActivityMediaItem[]
@@ -396,39 +413,39 @@ model Market {
 }
 
 model MarginMarketPolicy {
-  id                       String                   @id @default(auto()) @map("_id") @db.ObjectId
-  marketId                 String                   @unique @db.ObjectId
-  status                   MarginMarketPolicyStatus @default(DRAFT)
-  expectedNegativeRisk     Boolean
-  maxLeverageBps           Int                      @default(20000)
-  threeXApproved           Boolean                  @default(false)
-  maintenanceMarginBps     Int                      @default(3000)
-  feeBps                   Int                      @default(100)
-  minimumDepthAssets       String
-  maximumSpreadBps         Int                      @default(500)
-  maximumTwapDeviationBps  Int                      @default(1000)
-  maximumPriceAgeSeconds   Int                      @default(30)
-  closeBufferSeconds       Int
-  earliestResolutionAt     DateTime
-  mandatoryCloseAt         DateTime
-  maxMarketBorrowAssets    String
-  maxAccountBorrowAssets   String
-  maxCategoryBorrowAssets  String
-  maxVaultBorrowAssets     String
-  approvedBy               String?
-  notes                    String?
-  createdAt                DateTime                 @default(now())
-  updatedAt                DateTime                 @updatedAt
-  market                   Market                   @relation(fields: [marketId], references: [id], onDelete: NoAction)
+  id                      String                   @id @default(auto()) @map("_id") @db.ObjectId
+  marketId                String                   @unique @db.ObjectId
+  status                  MarginMarketPolicyStatus @default(DRAFT)
+  expectedNegativeRisk    Boolean
+  maxLeverageBps          Int                      @default(20000)
+  threeXApproved          Boolean                  @default(false)
+  maintenanceMarginBps    Int                      @default(3000)
+  feeBps                  Int                      @default(100)
+  minimumDepthAssets      String
+  maximumSpreadBps        Int                      @default(500)
+  maximumTwapDeviationBps Int                      @default(1000)
+  maximumPriceAgeSeconds  Int                      @default(30)
+  closeBufferSeconds      Int
+  earliestResolutionAt    DateTime
+  mandatoryCloseAt        DateTime
+  maxMarketBorrowAssets   String
+  maxAccountBorrowAssets  String
+  maxCategoryBorrowAssets String
+  maxVaultBorrowAssets    String
+  approvedBy              String?
+  notes                   String?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  market                  Market                   @relation(fields: [marketId], references: [id], onDelete: NoAction)
 
   @@index([status])
   @@index([mandatoryCloseAt])
 }
 
 model Position {
-  id                        String                @id @default(auto()) @map("_id") @db.ObjectId
-  userId                    String                @db.ObjectId
-  marketId                  String                @db.ObjectId
+  id                        String                     @id @default(auto()) @map("_id") @db.ObjectId
+  userId                    String                     @db.ObjectId
+  marketId                  String                     @db.ObjectId
   side                      PositionSide
   quantity                  String
   averageEntryPrice         String?
@@ -437,7 +454,7 @@ model Position {
   observedMarketPriceAt     DateTime?
   chainId                   Int?
   walletAddress             String?
-  executionMode             ExecutionMode         @default(SPOT)
+  executionMode             ExecutionMode              @default(SPOT)
   leverageMultiplier        String?
   marginCollateral          String?
   notionalAmount            String?
@@ -445,17 +462,18 @@ model Position {
   executionAdapterId        String?
   chainTransactionHash      String?
   idempotencyKey            String?
-  status                    PositionStatus        @default(PENDING_EXECUTION)
-  visibility                String?               @default("PRIVATE")
+  status                    PositionStatus             @default(PENDING_EXECUTION)
+  visibility                String?                    @default("PRIVATE")
   openedAt                  DateTime?
   closedAt                  DateTime?
-  createdAt                 DateTime              @default(now())
-  updatedAt                 DateTime              @updatedAt
-  user                      User                  @relation(fields: [userId], references: [id], onDelete: NoAction)
-  market                    Market                @relation(fields: [marketId], references: [id], onDelete: NoAction)
-  sourceCopyIntents         CopyTrade[]           @relation("CopyTradeSourcePosition")
-  resultingCopyTrade        CopyTrade?            @relation("CopyTradeResultingPosition")
-  executionAttempts         ExecutionAttempt[]    @relation("PositionExecutionAttempts")
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  user                      User                       @relation(fields: [userId], references: [id], onDelete: NoAction)
+  market                    Market                     @relation(fields: [marketId], references: [id], onDelete: NoAction)
+  sourceCopyIntents         CopyTrade[]                @relation("CopyTradeSourcePosition")
+  resultingCopyTrade        CopyTrade?                 @relation("CopyTradeResultingPosition")
+  executionAttempts         ExecutionAttempt[]         @relation("PositionExecutionAttempts")
+  polymarketMarginExecution PolymarketMarginExecution?
   contractTransactions      ContractTransaction[]
   socialReplies             PositionReply[]
 
@@ -464,6 +482,65 @@ model Position {
   @@index([status])
   @@index([executionMode])
   @@index([chainId])
+}
+
+model PolymarketMarginExecution {
+  id                        String                         @id @default(auto()) @map("_id") @db.ObjectId
+  positionId                String                         @unique @db.ObjectId
+  idempotencyKey            String                         @unique
+  authorizationNonce        String                         @unique
+  authorizationDeadline     DateTime
+  authorizationSigner       String
+  authorizationSignature    String
+  quoteId                   String
+  maxSlippageBps            Int
+  state                     PolymarketMarginExecutionState @default(AUTHORIZED)
+  conditionId               String
+  tokenId                   String
+  vaultAddress              String
+  adapterAddress            String
+  loanId                    String?                        @unique
+  custodyAddress            String?
+  sessionSignerAddress      String?
+  sessionSignerCiphertext   String?
+  depositWalletAddress      String?
+  clobCredentialsCiphertext String?
+  relayerTransactionId      String?
+  relayerOperation          String?
+  signedOrderPayload        Json?
+  clobOrderId               String?                        @unique
+  clobTradeIds              Json?
+  settlementTxHashes        Json?
+  actualFillPrice           String?
+  actualShares              String?
+  actualSpentAssets         String?
+  actualFeeAssets           String?
+  fundingTxHash             String?
+  custodyFundingTxHash      String?
+  securityTransferTxHash    String?
+  activationTxHash          String?
+  failureCode               String?
+  failureMessage            String?
+  requestPayload            Json?
+  responsePayload           Json?
+  operationId               String?
+  operationLockedUntil      DateTime?
+  reservedAt                DateTime?
+  orderSubmittedAt          DateTime?
+  fillConfirmedAt           DateTime?
+  securedAt                 DateTime?
+  openedAt                  DateTime?
+  closingAt                 DateTime?
+  closedAt                  DateTime?
+  lastReconciledAt          DateTime?
+  createdAt                 DateTime                       @default(now())
+  updatedAt                 DateTime                       @updatedAt
+  position                  Position                       @relation(fields: [positionId], references: [id], onDelete: NoAction)
+
+  @@index([state])
+  @@index([authorizationSigner])
+  @@index([depositWalletAddress])
+  @@index([lastReconciledAt])
 }
 
 model TradeSignal {
@@ -546,15 +623,15 @@ model SignalBookmark {
 }
 
 model PulsePost {
-  id           String          @id @default(auto()) @map("_id") @db.ObjectId
-  authorUserId String          @db.ObjectId
+  id           String              @id @default(auto()) @map("_id") @db.ObjectId
+  authorUserId String              @db.ObjectId
   body         String
   mediaUrl     String?
   mediaType    String?
-  status       PulsePostStatus @default(PUBLISHED)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
-  author       User            @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
+  status       PulsePostStatus     @default(PUBLISHED)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  author       User                @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
   replies      PulsePostReply[]
   reactions    PulsePostReaction[]
   bookmarks    PulsePostBookmark[]
@@ -750,39 +827,38 @@ model TradingRoom {
   @@index([ownerId])
 }
 
-
 model UserPreference {
-  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId             String   @unique @db.ObjectId
-  topics             String[]
-  regions            String[]
-  sports             String[]
-  mediaTypes         String[]
-  newsIntervalMinutes Int     @default(20)
-  notifyInActivity   Boolean  @default(true)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-  user               User     @relation(fields: [userId], references: [id], onDelete: NoAction)
+  id                  String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId              String   @unique @db.ObjectId
+  topics              String[]
+  regions             String[]
+  sports              String[]
+  mediaTypes          String[]
+  newsIntervalMinutes Int      @default(20)
+  notifyInActivity    Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id], onDelete: NoAction)
 
   @@index([updatedAt])
 }
 
 model ActivityMediaItem {
-  id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId          String?  @db.ObjectId
-  marketId        String?  @db.ObjectId
-  kind            String
-  title           String
-  summary         String
-  imageUrl        String?
-  videoUrl        String?
-  mediaBrief      Json?
-  source          String   @default("CONVICTION_AI")
-  status          String   @default("PUBLISHED")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  user            User?    @relation(fields: [userId], references: [id], onDelete: NoAction)
-  market          Market?  @relation(fields: [marketId], references: [id], onDelete: NoAction)
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String?  @db.ObjectId
+  marketId   String?  @db.ObjectId
+  kind       String
+  title      String
+  summary    String
+  imageUrl   String?
+  videoUrl   String?
+  mediaBrief Json?
+  source     String   @default("CONVICTION_AI")
+  status     String   @default("PUBLISHED")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User?    @relation(fields: [userId], references: [id], onDelete: NoAction)
+  market     Market?  @relation(fields: [marketId], references: [id], onDelete: NoAction)
 
   @@index([userId])
   @@index([marketId])
@@ -792,25 +868,25 @@ model ActivityMediaItem {
 }
 
 model UsageSession {
-  id              String          @id @default(auto()) @map("_id") @db.ObjectId
-  clientSessionId String          @unique
-  userId          String?         @db.ObjectId
-  socialAccountId String?         @db.ObjectId
-  authProvider    AuthProvider    @default(UNKNOWN)
-  source          String          @default("WEB_APP")
+  id              String         @id @default(auto()) @map("_id") @db.ObjectId
+  clientSessionId String         @unique
+  userId          String?        @db.ObjectId
+  socialAccountId String?        @db.ObjectId
+  authProvider    AuthProvider   @default(UNKNOWN)
+  source          String         @default("WEB_APP")
   entryPath       String?
   currentPath     String?
   userAgent       String?
   referrer        String?
-  startedAt       DateTime        @default(now())
-  lastSeenAt      DateTime        @default(now())
+  startedAt       DateTime       @default(now())
+  lastSeenAt      DateTime       @default(now())
   endedAt         DateTime?
-  durationSeconds Int             @default(0)
-  eventCount      Int             @default(0)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  user            User?           @relation(fields: [userId], references: [id], onDelete: NoAction)
-  socialAccount   SocialAccount?  @relation(fields: [socialAccountId], references: [id], onDelete: NoAction)
+  durationSeconds Int            @default(0)
+  eventCount      Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  user            User?          @relation(fields: [userId], references: [id], onDelete: NoAction)
+  socialAccount   SocialAccount? @relation(fields: [socialAccountId], references: [id], onDelete: NoAction)
   events          UsageEvent[]
 
   @@index([userId])
@@ -822,21 +898,21 @@ model UsageSession {
 }
 
 model UsageEvent {
-  id              String          @id @default(auto()) @map("_id") @db.ObjectId
-  sessionId       String?         @db.ObjectId
+  id              String         @id @default(auto()) @map("_id") @db.ObjectId
+  sessionId       String?        @db.ObjectId
   clientSessionId String
-  userId          String?         @db.ObjectId
-  socialAccountId String?         @db.ObjectId
+  userId          String?        @db.ObjectId
+  socialAccountId String?        @db.ObjectId
   type            UsageEventType
   area            String
   path            String?
   label           String?
   value           Float?
   metadata        Json?
-  createdAt       DateTime        @default(now())
-  session         UsageSession?   @relation(fields: [sessionId], references: [id], onDelete: NoAction)
-  user            User?           @relation(fields: [userId], references: [id], onDelete: NoAction)
-  socialAccount   SocialAccount?  @relation(fields: [socialAccountId], references: [id], onDelete: NoAction)
+  createdAt       DateTime       @default(now())
+  session         UsageSession?  @relation(fields: [sessionId], references: [id], onDelete: NoAction)
+  user            User?          @relation(fields: [userId], references: [id], onDelete: NoAction)
+  socialAccount   SocialAccount? @relation(fields: [socialAccountId], references: [id], onDelete: NoAction)
 
   @@index([sessionId])
   @@index([clientSessionId])
@@ -848,29 +924,29 @@ model UsageEvent {
 }
 
 model OmnistonQuoteEvent {
-  id               String              @id @default(auto()) @map("_id") @db.ObjectId
-  userId           String?             @db.ObjectId
-  platform         SocialPlatform      @default(TELEGRAM)
-  platformUserId   String?
-  username         String?
-  source           String              @default("TELEGRAM_BOT")
-  fromAsset        String
-  toAsset          String
-  amountUnits      String
-  status           OmnistonQuoteStatus
-  inputUnits       String?
-  outputUnits      String?
-  settlement       String?
-  resolverName     String?
-  quoteId          String?
-  gasBudget        String?
-  routeCount       Int?
-  errorCode        String?
-  errorMessage     String?
-  metadata         Json?
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  user             User?               @relation(fields: [userId], references: [id], onDelete: NoAction)
+  id             String              @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String?             @db.ObjectId
+  platform       SocialPlatform      @default(TELEGRAM)
+  platformUserId String?
+  username       String?
+  source         String              @default("TELEGRAM_BOT")
+  fromAsset      String
+  toAsset        String
+  amountUnits    String
+  status         OmnistonQuoteStatus
+  inputUnits     String?
+  outputUnits    String?
+  settlement     String?
+  resolverName   String?
+  quoteId        String?
+  gasBudget      String?
+  routeCount     Int?
+  errorCode      String?
+  errorMessage   String?
+  metadata       Json?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  user           User?               @relation(fields: [userId], references: [id], onDelete: NoAction)
 
   @@index([userId])
   @@index([platform])
@@ -882,15 +958,15 @@ model OmnistonQuoteEvent {
 }
 
 model TelegramChat {
-  id          String           @id @default(auto()) @map("_id") @db.ObjectId
-  chatId      String           @unique
-  title       String?
-  type        String?
-  role        TelegramChatRole @default(GENERAL)
-  isActive    Boolean          @default(true)
-  lastSeenAt  DateTime?
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  id         String           @id @default(auto()) @map("_id") @db.ObjectId
+  chatId     String           @unique
+  title      String?
+  type       String?
+  role       TelegramChatRole @default(GENERAL)
+  isActive   Boolean          @default(true)
+  lastSeenAt DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
 
   @@index([role])
   @@index([isActive])
@@ -944,18 +1020,18 @@ model SupportTicket {
 }
 
 model SupportTicketReply {
-  id          String        @id @default(auto()) @map("_id") @db.ObjectId
-  ticketId    String        @db.ObjectId
-  authorType  String
-  authorUserId String?      @db.ObjectId
-  authorName  String?
-  subject     String?
-  body        String
-  source      String        @default("APP")
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  author      User?         @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
+  id           String        @id @default(auto()) @map("_id") @db.ObjectId
+  ticketId     String        @db.ObjectId
+  authorType   String
+  authorUserId String?       @db.ObjectId
+  authorName   String?
+  subject      String?
+  body         String
+  source       String        @default("APP")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  ticket       SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author       User?         @relation(fields: [authorUserId], references: [id], onDelete: NoAction)
 
   @@index([ticketId])
   @@index([authorUserId])

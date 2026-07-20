@@ -31,6 +31,11 @@ import { env } from "../config/env.js";
 import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { getActiveContractConfig } from "./contracts.js";
+import {
+  advancePolymarketMarginExecution,
+  getPolymarketExecutionReadiness,
+  recordPolymarketLoanReservation,
+} from "./polymarket-execution-orchestrator.js";
 
 export const MAX_PENDING_MARGIN_LEVERAGE = 3;
 
@@ -70,36 +75,61 @@ export async function getExecutionCapabilities() {
   const activeContracts = await getActiveContractConfig(null);
   const hasActiveVault = activeContracts.some((deployment) => deployment.role === "MARGIN_VAULT");
   const adapterRuntime = getAdapterRuntime();
-  const activeAdapters = adapterRuntime.ready ? [adapterRuntime.adapterId] : [];
-  const chains = supportedIntentChains.map((chain) => ({
-    ...chain,
-    marginExecutionEnabled:
-      adapterRuntime.ready &&
-      chain.network === "testnet" &&
-      chain.walletFlowEnabled === true &&
-      env.convictionExecutionMode === "testnet",
-  }));
+  const polymarketReadiness =
+    env.convictionExecutionMode === "polymarket" ? await getPolymarketExecutionReadiness() : null;
+  const executionReady = polymarketReadiness?.productionVenueFillEnabled ?? adapterRuntime.ready;
+  const activeAdapters = executionReady ? [adapterRuntime.adapterId] : [];
+  const chains = supportedIntentChains.map((chain) => {
+    const isPolymarketPolygon =
+      chain.chainId === 137 && env.convictionExecutionMode === "polymarket";
+    const walletFlowEnabled = isPolymarketPolygon
+      ? Boolean(env.polymarketPusdVaultAddress && env.polymarketPusdAddress)
+      : chain.walletFlowEnabled;
+    return {
+      ...chain,
+      vaultAddress: isPolymarketPolygon ? env.polymarketPusdVaultAddress : chain.vaultAddress,
+      walletFlowEnabled,
+      marginExecutionEnabled: isPolymarketPolygon
+        ? polymarketReadiness?.productionVenueFillEnabled === true
+        : adapterRuntime.ready &&
+          chain.network === "testnet" &&
+          walletFlowEnabled &&
+          env.convictionExecutionMode === "testnet",
+    };
+  });
+  const liveVaultAddress =
+    env.convictionExecutionMode === "polymarket"
+      ? env.polymarketPusdVaultAddress
+      : env.convictionVaultAddress;
+  const liveAdapterAddress =
+    env.convictionExecutionMode === "polymarket"
+      ? env.polymarketExecutionAdapterAddress
+      : env.convictionExecutionAdapterAddress;
 
   return {
     evmOnly: true,
     architecture: "INTENT_FIRST_MULTICHAIN_MARGIN_LAYER",
     spotExecutionEnabled: false,
-    marginExecutionEnabled: adapterRuntime.ready,
-    leverageEnabled: adapterRuntime.ready,
+    marginExecutionEnabled: executionReady,
+    leverageEnabled: executionReady,
     marginIntentsEnabled: true,
     leverageRequiresContracts: true,
     maxPendingMarginLeverage: MAX_PENDING_MARGIN_LEVERAGE,
     activeAdapters,
     contractLayer: {
-      status: hasActiveVault
-        ? adapterRuntime.ready
-          ? "TESTNET_VAULT_ADAPTER_READY"
-          : "TESTNET_VAULTS_CONNECTED"
-        : env.convictionVaultAddress
-          ? "CONFIGURED_NOT_ENABLED"
-          : "PLANNED",
-      vaultAddress: env.convictionVaultAddress,
-      executionAdapterAddress: env.convictionExecutionAdapterAddress,
+      status: polymarketReadiness
+        ? polymarketReadiness.productionVenueFillEnabled
+          ? "POLYGON_PUSD_CANARY_READY"
+          : "POLYGON_PUSD_BLOCKED"
+        : hasActiveVault
+          ? adapterRuntime.ready
+            ? "TESTNET_VAULT_ADAPTER_READY"
+            : "TESTNET_VAULTS_CONNECTED"
+          : liveVaultAddress
+            ? "CONFIGURED_NOT_ENABLED"
+            : "PLANNED",
+      vaultAddress: liveVaultAddress,
+      executionAdapterAddress: liveAdapterAddress,
       marginVaultRequired: true,
       contractRepoPath: "contracts/src/ConvictionVault.sol",
       activeContracts,
@@ -109,9 +139,13 @@ export async function getExecutionCapabilities() {
         adapterRuntime.message,
       ],
     },
-    recommendation: adapterRuntime.ready
-      ? "Testnet adapter settlement is enabled. Use production venue execution only after mainnet vaults, CLOB credentials, monitoring, and liquidation operations are configured."
-      : "Record user intents now. Enable an adapter signer before showing positions as executed.",
+    recommendation: polymarketReadiness
+      ? polymarketReadiness.productionVenueFillEnabled
+        ? "Run a capped open-secure-close-repay canary before enabling production limits."
+        : `Production execution is blocked: ${polymarketReadiness.missing.join(" ")}`
+      : adapterRuntime.ready
+        ? "Testnet adapter settlement is enabled. Do not describe it as a live venue fill."
+        : "Record user intents now. Enable an adapter signer before showing positions as executed.",
     chains,
   };
 }
@@ -137,16 +171,10 @@ export async function getExecutionReadiness() {
     missing.push("CONVICTION_EXECUTION_SIGNER_PRIVATE_KEY is missing.");
   }
 
-  if (env.convictionExecutionMode === "polymarket") {
-    if (!env.polymarketClobApiKey) missing.push("POLYMARKET_CLOB_API_KEY is missing.");
-    if (!env.polymarketClobApiSecret) missing.push("POLYMARKET_CLOB_API_SECRET is missing.");
-    if (!env.polymarketClobApiPassphrase)
-      missing.push("POLYMARKET_CLOB_API_PASSPHRASE is missing.");
-    if (!env.polymarketClobFunderAddress)
-      missing.push("POLYMARKET_CLOB_FUNDER_ADDRESS is missing.");
-    missing.push(
-      "Mainnet collateral custody and venue settlement rails are not enabled in this API.",
-    );
+  const polymarketReadiness =
+    env.convictionExecutionMode === "polymarket" ? await getPolymarketExecutionReadiness() : null;
+  if (polymarketReadiness && !polymarketReadiness.productionVenueFillEnabled) {
+    missing.push(...polymarketReadiness.missing);
   }
 
   const stages = [
@@ -188,23 +216,31 @@ export async function getExecutionReadiness() {
     {
       id: "adapter_settlement",
       label: "Settle adapter execution",
-      ready: adapterRuntime.ready,
+      ready:
+        env.convictionExecutionMode === "polymarket"
+          ? polymarketReadiness?.productionVenueFillEnabled === true
+          : adapterRuntime.ready,
       testEndpoint: "POST /execution/positions/:positionId/settle",
       note: adapterRuntime.message,
     },
   ];
 
   return {
-    status: adapterRuntime.ready
-      ? "ADAPTER_READY"
-      : walletFlowChains.length > 0
-        ? "WALLET_FLOW_READY"
-        : "BLOCKED",
+    status: polymarketReadiness?.productionVenueFillEnabled
+      ? "PRODUCTION_CANARY_READY"
+      : adapterRuntime.ready
+        ? "ADAPTER_READY"
+        : walletFlowChains.length > 0
+          ? "WALLET_FLOW_READY"
+          : "BLOCKED",
     canCreateMarginIntent: true,
     canPrepareWalletTransactions: walletFlowChains.length > 0,
-    canSettleAdapterExecution: adapterRuntime.ready,
-    canClaimRealMarketFill: adapterRuntime.ready && env.convictionExecutionMode === "testnet",
-    productionVenueFillEnabled: false,
+    canSettleAdapterExecution:
+      polymarketReadiness?.productionVenueFillEnabled ?? adapterRuntime.ready,
+    canClaimRealMarketFill:
+      polymarketReadiness?.productionVenueFillEnabled === true ||
+      (adapterRuntime.ready && env.convictionExecutionMode === "testnet"),
+    productionVenueFillEnabled: polymarketReadiness?.productionVenueFillEnabled ?? false,
     adapter: {
       id: adapterRuntime.adapterId,
       code: adapterRuntime.code,
@@ -214,8 +250,9 @@ export async function getExecutionReadiness() {
     missing,
     stages,
     supportedChains: capabilities.chains,
-    warning:
-      "A Conviction position should only show EXECUTED after adapter settlement confirms. Wallet approval, deposit, and margin intent transactions are testable, but they are not Polymarket venue fills.",
+    warning: polymarketReadiness?.productionVenueFillEnabled
+      ? "Production remains canary-capped. A position becomes EXECUTED only after CLOB trades, Polygon receipts, ERC-1155 custody, and vault activation all reconcile."
+      : "A Conviction position should only show EXECUTED after adapter settlement confirms. Wallet approval, deposit, and margin intent transactions are not venue fills.",
   };
 }
 
@@ -289,10 +326,30 @@ export async function settlePositionExecution(positionId: string) {
   }
 
   if (env.convictionExecutionMode === "polymarket") {
-    return createBlockedAttempt(position, {
-      code: "POLYMARKET_ADAPTER_NOT_READY",
-      message:
-        "Polymarket fills need mainnet venue custody, CLOB API credentials, and a production adapter before this testnet vault intent can be treated as a real market fill.",
+    const execution = await prisma.polymarketMarginExecution.findUnique({
+      where: { positionId: position.id },
+    });
+    if (!execution) {
+      return createBlockedAttempt(position, {
+        code: "POLYMARKET_EXECUTION_AUTHORIZATION_REQUIRED",
+        message:
+          "Prepare and sign the Polygon margin execution authorization before settlement starts.",
+      });
+    }
+    if (
+      execution.state === "AUTHORIZED" &&
+      position.chainTransactionHash &&
+      transactionHashPattern.test(position.chainTransactionHash)
+    ) {
+      await recordPolymarketLoanReservation({
+        executionId: execution.id,
+        userId: position.userId,
+        transactionHash: position.chainTransactionHash,
+      });
+    }
+    return advancePolymarketMarginExecution({
+      executionId: execution.id,
+      userId: position.userId,
     });
   }
 
@@ -579,21 +636,29 @@ function getAdapterRuntime() {
 
   if (env.convictionExecutionMode === "polymarket") {
     const hasCredentials = Boolean(
-      env.polymarketClobApiKey &&
-        env.polymarketClobApiSecret &&
-        env.polymarketClobApiPassphrase &&
-        env.polymarketClobFunderAddress,
+      env.polymarketPusdVaultAddress &&
+        env.polymarketExecutionAdapterAddress &&
+        env.polymarketExecutionSignerPrivateKey &&
+        env.polymarketExecutionKeyEncryptionKey &&
+        env.polymarketPusdAddress &&
+        env.polymarketCtfAddress &&
+        env.polymarketExchangeV2Address &&
+        env.polymarketNegRiskExchangeV2Address &&
+        env.polymarketDepositWalletFactoryAddress &&
+        env.polymarketBuilderCode &&
+        ((env.polymarketRelayerApiKey && env.polymarketRelayerApiKeyAddress) ||
+          (env.polymarketBuilderApiKey &&
+            env.polymarketBuilderApiSecret &&
+            env.polymarketBuilderApiPassphrase)),
     );
 
     return {
       adapterId: POLYMARKET_ADAPTER_ID,
-      code: hasCredentials
-        ? "POLYMARKET_ADAPTER_NEEDS_MAINNET_RAILS"
-        : "POLYMARKET_CREDENTIALS_MISSING",
+      code: hasCredentials ? "POLYMARKET_ADAPTER_CONFIGURED" : "POLYMARKET_CREDENTIALS_MISSING",
       message: hasCredentials
-        ? "Polymarket CLOB credentials are configured, but production market fills still require mainnet collateral custody and venue settlement rails."
-        : "Polymarket CLOB credentials are missing. Configure API key, secret, passphrase, and funder before production venue fills.",
-      ready: false,
+        ? "Polymarket CLOB V2 and isolated Polygon custody are configured. Every execution still runs live readiness and reconciliation checks."
+        : "Production Polygon vault, signer, relayer, builder, custody encryption, and current venue addresses are required.",
+      ready: hasCredentials,
     };
   }
 
