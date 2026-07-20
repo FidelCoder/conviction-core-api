@@ -68,7 +68,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   });
 }
 
-function assertAdminAuthorized(authorization: string | undefined) {
+export function assertAdminAuthorized(authorization: string | undefined) {
   if (!env.adminDashboardToken) {
     throw new AppError("Admin dashboard token is not configured", {
       code: "ADMIN_TOKEN_MISSING",

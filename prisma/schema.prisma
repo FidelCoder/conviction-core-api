@@ -106,6 +106,12 @@ enum ExecutionAttemptStatus {
   CANCELLED
 }
 
+enum MarginMarketPolicyStatus {
+  DRAFT
+  APPROVED
+  PAUSED
+}
+
 enum TradeSignalSide {
   YES
   NO
@@ -364,6 +370,7 @@ model Market {
   slug                  String?
   conditionId           String?
   questionId            String?
+  negativeRisk          Boolean?
   orderBookEnabled      Boolean       @default(false)
   acceptingOrders       Boolean       @default(false)
   orderPriceMinTickSize String?
@@ -378,6 +385,7 @@ model Market {
   positions             Position[]
   signals               TradeSignal[]
   activityMediaItems    ActivityMediaItem[]
+  marginRiskPolicy      MarginMarketPolicy?
 
   @@unique([source, externalMarketId])
   @@index([source])
@@ -385,6 +393,36 @@ model Market {
   @@index([category])
   @@index([conditionId])
   @@index([questionId])
+}
+
+model MarginMarketPolicy {
+  id                       String                   @id @default(auto()) @map("_id") @db.ObjectId
+  marketId                 String                   @unique @db.ObjectId
+  status                   MarginMarketPolicyStatus @default(DRAFT)
+  expectedNegativeRisk     Boolean
+  maxLeverageBps           Int                      @default(20000)
+  threeXApproved           Boolean                  @default(false)
+  maintenanceMarginBps     Int                      @default(3000)
+  feeBps                   Int                      @default(100)
+  minimumDepthAssets       String
+  maximumSpreadBps         Int                      @default(500)
+  maximumTwapDeviationBps  Int                      @default(1000)
+  maximumPriceAgeSeconds   Int                      @default(30)
+  closeBufferSeconds       Int
+  earliestResolutionAt     DateTime
+  mandatoryCloseAt         DateTime
+  maxMarketBorrowAssets    String
+  maxAccountBorrowAssets   String
+  maxCategoryBorrowAssets  String
+  maxVaultBorrowAssets     String
+  approvedBy               String?
+  notes                    String?
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  market                   Market                   @relation(fields: [marketId], references: [id], onDelete: NoAction)
+
+  @@index([status])
+  @@index([mandatoryCloseAt])
 }
 
 model Position {
