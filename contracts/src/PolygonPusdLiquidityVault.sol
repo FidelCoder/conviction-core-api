@@ -74,6 +74,7 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
     }
 
     uint256 public constant BPS = 10_000;
+    bytes32 public constant ACTIVE_REPAYMENT_VERSION = keccak256("CONVICTION_ACTIVE_REPAYMENT_V1");
     uint256 public constant SHARE_DECIMALS_OFFSET = 6;
     uint256 private constant VIRTUAL_SHARES = 10 ** SHARE_DECIMALS_OFFSET;
 
@@ -179,6 +180,9 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         uint256 badDebt,
         uint256 traderSurplus,
         bytes32 settlementRef
+    );
+    event LoanPrincipalRepaid(
+        bytes32 indexed loanId, address indexed trader, uint256 assets, uint256 remainingPrincipal
     );
     event RedemptionRequested(
         uint256 indexed requestId, address indexed owner, address indexed receiver, uint256 shares
@@ -805,6 +809,23 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         loan.status = LoanStatus.CLOSING;
         PolymarketIsolatedMarginAccount(loan.custodyAccount).beginClose(loan.executionWallet);
         emit LoanCloseStarted(loanId, loan.executionWallet, loan.securedOutcomeShares);
+    }
+
+    function repayLoanPrincipal(bytes32 loanId, uint256 assets)
+        external
+        nonReentrant
+        onDeploymentChain
+    {
+        Loan storage loan = loans[loanId];
+        if (loan.trader != msg.sender) revert NotAuthorized();
+        if (loan.status != LoanStatus.ACTIVE) revert InvalidLoanStatus();
+        if (assets == 0 || assets > loan.borrowAssets) revert AmountRequired();
+
+        _pullExact(msg.sender, assets);
+        loan.borrowAssets -= assets;
+        totalBorrowedAssets -= assets;
+        _removeExposure(loan.marketId, loan.trader, assets);
+        emit LoanPrincipalRepaid(loanId, loan.trader, assets, loan.borrowAssets);
     }
 
     function restoreLoanAfterFailedClose(bytes32 loanId) external nonReentrant onDeploymentChain {

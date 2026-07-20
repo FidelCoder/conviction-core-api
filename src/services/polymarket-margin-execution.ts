@@ -288,6 +288,8 @@ export function normalizePolymarketMarginExecution(execution: {
     activationTxHash: "activationTxHash" in execution ? execution.activationTxHash : null,
     activeCloseAttemptId:
       "activeCloseAttemptId" in execution ? execution.activeCloseAttemptId : null,
+    stopLossPrice: "stopLossPrice" in execution ? execution.stopLossPrice : null,
+    takeProfitPrice: "takeProfitPrice" in execution ? execution.takeProfitPrice : null,
     failureCode: execution.failureCode,
     failureMessage: execution.failureMessage,
     reservedAt: execution.reservedAt?.toISOString() ?? null,

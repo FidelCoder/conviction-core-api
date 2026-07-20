@@ -112,6 +112,7 @@ export async function getExecutionCapabilities() {
     spotExecutionEnabled: false,
     marginExecutionEnabled: executionReady,
     leverageEnabled: executionReady,
+    activeRepaymentEnabled: executionReady && env.polymarketActiveRepayEnabled,
     marginIntentsEnabled: true,
     leverageRequiresContracts: true,
     maxPendingMarginLeverage: MAX_PENDING_MARGIN_LEVERAGE,
