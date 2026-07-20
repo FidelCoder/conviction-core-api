@@ -43,6 +43,7 @@ const marginAuthorizationTypes = {
     { name: "collateralAssets", type: "uint256" },
     { name: "borrowAssets", type: "uint256" },
     { name: "minimumOutcomeShares", type: "uint256" },
+    { name: "financingFeeAssets", type: "uint256" },
     { name: "priceLimit", type: "uint256" },
     { name: "maxSlippageBps", type: "uint16" },
     { name: "nonce", type: "bytes32" },
@@ -55,7 +56,7 @@ const erc20ApproveAbi = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
 ]);
 const polygonVaultAbi = parseAbi([
-  "function reserveLoan((address adapter,bytes32 marketId,uint256 traderEquity,uint256 borrowAssets,address outcomeToken,uint256 outcomeTokenId,uint256 minimumOutcomeShares,uint256 deadline) request) returns (bytes32 loanId,address custodyAccount)",
+  "function reserveLoan((address adapter,bytes32 marketId,uint256 traderEquity,uint256 borrowAssets,address outcomeToken,uint256 outcomeTokenId,uint256 minimumOutcomeShares,uint256 financingFeeAssets,uint256 deadline) request) returns (bytes32 loanId,address custodyAccount)",
 ]);
 
 export type PreparePolymarketExecutionInput = {
@@ -70,6 +71,7 @@ export type AuthorizePolymarketExecutionInput = PreparePolymarketExecutionInput 
   quoteId: string;
   borrowAssets: string;
   minimumOutcomeShares: string;
+  financingFeeAssets: string;
   priceLimit: string;
   signature: string;
 };
@@ -105,6 +107,7 @@ export async function preparePolymarketMarginExecution(
     quoteId: decision.quoteId,
     borrowAssets: decision.quote.borrowAssets,
     minimumOutcomeShares: decision.quote.estimatedOutcomeShares,
+    financingFeeAssets: decision.quote.feeAssets,
     priceLimit,
   };
   const typedData = buildAuthorizationTypedData(context, input, authorization);
@@ -190,6 +193,7 @@ export async function authorizePolymarketMarginExecution(
           borrowAssets: input.borrowAssets,
           leverageBps: context.leverageBps,
           minimumOutcomeShares: input.minimumOutcomeShares,
+          financingFeeAssets: input.financingFeeAssets,
           priceLimit: input.priceLimit,
           side: context.position.side,
           tokenId: context.tokenId,
@@ -278,6 +282,8 @@ export function normalizePolymarketMarginExecution(execution: {
     securityTransferTxHash:
       "securityTransferTxHash" in execution ? execution.securityTransferTxHash : null,
     activationTxHash: "activationTxHash" in execution ? execution.activationTxHash : null,
+    activeCloseAttemptId:
+      "activeCloseAttemptId" in execution ? execution.activeCloseAttemptId : null,
     failureCode: execution.failureCode,
     failureMessage: execution.failureMessage,
     reservedAt: execution.reservedAt?.toISOString() ?? null,
@@ -389,13 +395,14 @@ function buildAuthorizationTypedData(
     quoteId: string;
     borrowAssets: string;
     minimumOutcomeShares: string;
+    financingFeeAssets: string;
     priceLimit: string;
   },
 ) {
   return {
     domain: {
       name: "Conviction Markets Margin",
-      version: "1",
+      version: "2",
       chainId: polygonChainId,
       verifyingContract: context.vaultAddress,
     },
@@ -414,6 +421,10 @@ function buildAuthorizationTypedData(
       minimumOutcomeShares: parseSixDecimalAssets(
         authorization.minimumOutcomeShares,
         "minimumOutcomeShares",
+      ),
+      financingFeeAssets: parseSixDecimalAssets(
+        authorization.financingFeeAssets,
+        "financingFeeAssets",
       ),
       priceLimit: parseSixDecimalAssets(authorization.priceLimit, "priceLimit"),
       maxSlippageBps: input.maxSlippageBps,
@@ -442,6 +453,7 @@ function buildReservationWalletCalls(
   authorization: {
     borrowAssets: string;
     minimumOutcomeShares: string;
+    financingFeeAssets: string;
   },
 ) {
   const collateralUnits = parseSixDecimalAssets(
@@ -458,6 +470,10 @@ function buildReservationWalletCalls(
     minimumOutcomeShares: parseSixDecimalAssets(
       authorization.minimumOutcomeShares,
       "minimumOutcomeShares",
+    ),
+    financingFeeAssets: parseSixDecimalAssets(
+      authorization.financingFeeAssets,
+      "financingFeeAssets",
     ),
     deadline: BigInt(input.deadline),
   };
@@ -496,6 +512,7 @@ function assertFreshQuoteInsideAuthorization(
     borrowAssets: string;
     estimatedOutcomeShares: string;
     openingPrice: string;
+    feeAssets: string;
   },
 ) {
   if (
@@ -509,6 +526,12 @@ function assertFreshQuoteInsideAuthorization(
     parseSixDecimalAssets(authorized.minimumOutcomeShares, "minimumOutcomeShares")
   ) {
     throw changedTerms("Live depth no longer satisfies the signed minimum share amount.");
+  }
+  if (
+    parseSixDecimalAssets(authorized.financingFeeAssets, "financingFeeAssets") !==
+    parseSixDecimalAssets(fresh.feeAssets, "fresh.feeAssets")
+  ) {
+    throw changedTerms("The fixed financing fee changed after the user signed.");
   }
   const freshLimit = calculateFokBuyPriceLimit(
     fresh.openingPrice,
@@ -552,6 +575,7 @@ function validateAuthorizationInput(input: AuthorizePolymarketExecutionInput) {
   }
   parseSixDecimalAssets(input.borrowAssets, "borrowAssets");
   parseSixDecimalAssets(input.minimumOutcomeShares, "minimumOutcomeShares");
+  parseSixDecimalAssets(input.financingFeeAssets, "financingFeeAssets");
   const limit = parseSixDecimalAssets(input.priceLimit, "priceLimit");
   if (limit <= 0n || limit >= 1_000_000n) throw invalidInput("priceLimit must be between 0 and 1.");
 }

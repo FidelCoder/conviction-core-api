@@ -166,6 +166,10 @@ export class PolymarketClobExecutionClient {
     });
   }
 
+  getFeeRateBps(tokenId: string) {
+    return this.client.getFeeRateBps(tokenId);
+  }
+
   async syncCollateralBalance() {
     await this.client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
   }

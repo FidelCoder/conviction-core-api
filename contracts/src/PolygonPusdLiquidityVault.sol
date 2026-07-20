@@ -22,7 +22,8 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         ACTIVE,
         SETTLED,
         FAILED,
-        CANCELLED
+        CANCELLED,
+        CLOSING
     }
 
     enum RedemptionStatus {
@@ -40,6 +41,7 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         address outcomeToken;
         uint256 outcomeTokenId;
         uint256 minimumOutcomeShares;
+        uint256 financingFeeAssets;
         uint256 deadline;
     }
 
@@ -55,8 +57,11 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         uint256 traderEquity;
         uint256 borrowAssets;
         uint256 fundedAssets;
+        uint256 financingFeeAssets;
         uint256 deadline;
         LoanStatus status;
+        address executionWallet;
+        uint256 executionWalletBaselineShares;
         bytes32 executionRef;
         bytes32 settlementRef;
     }
@@ -80,12 +85,14 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
 
     address public owner;
     address public pendingOwner;
+    address public guardian;
+    address public riskManager;
     bool public paused;
     bool private locked;
 
     uint256 public idleReserveBps = 2_000;
     uint256 public reserveFactorBps = 2_000;
-    uint256 public maximumInterestBps = 5_000;
+    uint256 public maximumFinancingFeeBps = 5_000;
     uint256 public defaultMarketExposureCap;
     uint256 public accountExposureCap;
 
@@ -95,8 +102,10 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
     uint256 public totalTraderEquityHeld;
     uint256 public protocolReserves;
     uint256 public accruedProtocolFees;
-    uint256 public totalInterestCollected;
+    uint256 public totalFinancingFeesCollected;
     uint256 public totalBadDebt;
+    uint256 public totalReserveLosses;
+    uint256 public totalUncoveredBadDebt;
     uint256 public totalQueuedShares;
     uint256 public nextLoanNonce = 1;
     uint256 public nextRedemptionId = 1;
@@ -124,13 +133,15 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
     );
     event OwnershipTransferStarted(address indexed owner, address indexed pendingOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event GuardianUpdated(address indexed guardian);
+    event RiskManagerUpdated(address indexed riskManager);
     event PauseStatusUpdated(bool paused);
     event AdapterUpdated(address indexed adapter, bool enabled);
     event ExecutionTargetUpdated(address indexed target, bool enabled);
     event RiskParametersUpdated(
         uint256 idleReserveBps,
         uint256 reserveFactorBps,
-        uint256 maximumInterestBps,
+        uint256 maximumFinancingFeeBps,
         uint256 defaultMarketExposureCap,
         uint256 accountExposureCap
     );
@@ -147,19 +158,23 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         uint256 borrowAssets
     );
     event LoanFunded(bytes32 indexed loanId, uint256 fundedAssets);
+    event ExecutionWalletCommitted(bytes32 indexed loanId, address indexed executionWallet);
     event LoanActivated(
         bytes32 indexed loanId,
         uint256 traderEquity,
         uint256 principal,
         uint256 securedOutcomeShares,
+        address executionWallet,
         bytes32 executionRef
     );
+    event LoanCloseStarted(bytes32 indexed loanId, address indexed executionWallet, uint256 shares);
+    event LoanCloseRestored(bytes32 indexed loanId, uint256 shares);
     event LoanFailed(bytes32 indexed loanId, bytes32 reasonCode);
     event LoanCancelled(bytes32 indexed loanId);
     event LoanSettled(
         bytes32 indexed loanId,
         uint256 principalRecovered,
-        uint256 interestRecovered,
+        uint256 financingFeeRecovered,
         uint256 reserveCover,
         uint256 badDebt,
         uint256 traderSurplus,
@@ -199,6 +214,11 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         _;
     }
 
+    modifier onlyRiskManager() {
+        if (msg.sender != owner && msg.sender != riskManager) revert NotAuthorized();
+        _;
+    }
+
     modifier nonReentrant() {
         _nonReentrantBefore();
         _;
@@ -218,6 +238,8 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
 
         assetToken = IERC20Metadata(asset_);
         owner = initialOwner;
+        guardian = initialOwner;
+        riskManager = initialOwner;
         deploymentChainId = chainId_;
         name = "Conviction Polygon pUSD Vault";
         symbol = "cvpUSD";
@@ -257,6 +279,24 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         emit PauseStatusUpdated(nextPaused);
     }
 
+    function pause() external {
+        if (msg.sender != owner && msg.sender != guardian) revert NotAuthorized();
+        paused = true;
+        emit PauseStatusUpdated(true);
+    }
+
+    function setGuardian(address nextGuardian) external onlyOwner {
+        if (nextGuardian == address(0)) revert InvalidAddress();
+        guardian = nextGuardian;
+        emit GuardianUpdated(nextGuardian);
+    }
+
+    function setRiskManager(address nextRiskManager) external onlyOwner {
+        if (nextRiskManager == address(0)) revert InvalidAddress();
+        riskManager = nextRiskManager;
+        emit RiskManagerUpdated(nextRiskManager);
+    }
+
     function setAdapter(address adapter, bool enabled) external onlyOwner {
         if (adapter == address(0)) revert InvalidAddress();
         authorizedAdapters[adapter] = enabled;
@@ -275,33 +315,37 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         return allowedExecutionTargets[target];
     }
 
+    function loanStatus(bytes32 loanId) external view returns (LoanStatus) {
+        return loans[loanId].status;
+    }
+
     function setRiskParameters(
         uint256 idleReserveBps_,
         uint256 reserveFactorBps_,
-        uint256 maximumInterestBps_,
+        uint256 maximumFinancingFeeBps_,
         uint256 defaultMarketExposureCap_,
         uint256 accountExposureCap_
-    ) external onlyOwner {
+    ) external onlyRiskManager {
         if (
-            idleReserveBps_ > 5_000 || reserveFactorBps_ > BPS || maximumInterestBps_ > BPS
+            idleReserveBps_ > 5_000 || reserveFactorBps_ > BPS || maximumFinancingFeeBps_ > BPS
                 || defaultMarketExposureCap_ == 0 || accountExposureCap_ == 0
         ) revert InvalidParameters();
 
         idleReserveBps = idleReserveBps_;
         reserveFactorBps = reserveFactorBps_;
-        maximumInterestBps = maximumInterestBps_;
+        maximumFinancingFeeBps = maximumFinancingFeeBps_;
         defaultMarketExposureCap = defaultMarketExposureCap_;
         accountExposureCap = accountExposureCap_;
         emit RiskParametersUpdated(
             idleReserveBps_,
             reserveFactorBps_,
-            maximumInterestBps_,
+            maximumFinancingFeeBps_,
             defaultMarketExposureCap_,
             accountExposureCap_
         );
     }
 
-    function setMarketExposureCap(bytes32 marketId, uint256 cap) external onlyOwner {
+    function setMarketExposureCap(bytes32 marketId, uint256 cap) external onlyRiskManager {
         if (marketId == bytes32(0) || cap == 0) revert InvalidParameters();
         marketExposureCap[marketId] = cap;
         emit MarketExposureCapUpdated(marketId, cap);
@@ -546,6 +590,10 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
                 || request.minimumOutcomeShares == 0
         ) revert InvalidMarket();
         if (request.deadline <= block.timestamp) revert DeadlineExpired();
+        if (
+            request.financingFeeAssets
+                > _mulDiv(request.traderEquity + request.borrowAssets, maximumFinancingFeeBps, BPS)
+        ) revert InvalidParameters();
         if (request.borrowAssets > availableLiquidity()) revert InsufficientLiquidity();
 
         uint256 marketCap = marketExposureCap[request.marketId];
@@ -595,8 +643,11 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
             traderEquity: request.traderEquity,
             borrowAssets: request.borrowAssets,
             fundedAssets: 0,
+            financingFeeAssets: request.financingFeeAssets,
             deadline: request.deadline,
             status: LoanStatus.RESERVED,
+            executionWallet: address(0),
+            executionWalletBaselineShares: 0,
             executionRef: bytes32(0),
             settlementRef: bytes32(0)
         });
@@ -617,10 +668,11 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
     }
 
     function fundLoan(bytes32 loanId) external nonReentrant onDeploymentChain {
-        Loan storage loan = _loanForAdapter(loanId);
+        Loan storage loan = _loanForActiveAdapter(loanId);
         if (paused) revert VaultPaused();
         if (loan.status != LoanStatus.RESERVED) revert InvalidLoanStatus();
         if (loan.deadline <= block.timestamp) revert DeadlineExpired();
+        if (loan.executionWallet == address(0)) revert InvalidAddress();
 
         uint256 funding = loan.traderEquity + loan.borrowAssets;
         loan.status = LoanStatus.EXECUTING;
@@ -637,14 +689,17 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         nonReentrant
         onDeploymentChain
     {
-        Loan storage loan = _loanForAdapter(loanId);
+        Loan storage loan = _loanForActiveAdapter(loanId);
         if (loan.status != LoanStatus.EXECUTING) revert InvalidLoanStatus();
         if (loan.deadline <= block.timestamp) revert DeadlineExpired();
+        uint256 custodyShares =
+            IERC1155(loan.outcomeToken).balanceOf(loan.custodyAccount, loan.outcomeTokenId);
         if (
             securedOutcomeShares < loan.minimumOutcomeShares
-                || IERC1155(loan.outcomeToken).balanceOf(loan.custodyAccount, loan.outcomeTokenId)
-                    < securedOutcomeShares
-        ) revert UnsecuredPosition();
+                || custodyShares != securedOutcomeShares
+        ) {
+            revert UnsecuredPosition();
+        }
 
         uint256 custodyCash = assetToken.balanceOf(loan.custodyAccount);
         if (custodyCash > loan.fundedAssets) revert InvalidParameters();
@@ -672,11 +727,30 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         loan.securedOutcomeShares = securedOutcomeShares;
         loan.executionRef = executionRef;
         loan.status = LoanStatus.ACTIVE;
-        emit LoanActivated(loanId, equityUsed, principal, securedOutcomeShares, executionRef);
+        emit LoanActivated(
+            loanId, equityUsed, principal, securedOutcomeShares, loan.executionWallet, executionRef
+        );
+    }
+
+    function commitExecutionWallet(bytes32 loanId, address executionWallet)
+        external
+        nonReentrant
+        onDeploymentChain
+    {
+        Loan storage loan = loans[loanId];
+        if (loan.trader != msg.sender) revert NotAuthorized();
+        if (loan.status != LoanStatus.RESERVED || loan.executionWallet != address(0)) {
+            revert InvalidLoanStatus();
+        }
+        if (executionWallet == address(0) || executionWallet.code.length == 0) {
+            revert InvalidAddress();
+        }
+        loan.executionWallet = executionWallet;
+        emit ExecutionWalletCommitted(loanId, executionWallet);
     }
 
     function failLoan(bytes32 loanId, bytes32 reasonCode) external nonReentrant onDeploymentChain {
-        Loan storage loan = _loanForAdapter(loanId);
+        Loan storage loan = _loanForOriginalAdapter(loanId);
         if (loan.status == LoanStatus.RESERVED) {
             _releaseReservation(loan);
             loan.status = LoanStatus.FAILED;
@@ -721,17 +795,45 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         emit LoanCancelled(loanId);
     }
 
-    function settleLoan(bytes32 loanId, uint256 interestDue, bytes32 settlementRef)
+    function beginLoanClose(bytes32 loanId) external nonReentrant onDeploymentChain {
+        Loan storage loan = _loanForOriginalAdapter(loanId);
+        if (loan.status != LoanStatus.ACTIVE) revert InvalidLoanStatus();
+        if (loan.executionWallet == address(0)) revert InvalidAddress();
+
+        loan.executionWalletBaselineShares =
+            IERC1155(loan.outcomeToken).balanceOf(loan.executionWallet, loan.outcomeTokenId);
+        loan.status = LoanStatus.CLOSING;
+        PolymarketIsolatedMarginAccount(loan.custodyAccount).beginClose(loan.executionWallet);
+        emit LoanCloseStarted(loanId, loan.executionWallet, loan.securedOutcomeShares);
+    }
+
+    function restoreLoanAfterFailedClose(bytes32 loanId) external nonReentrant onDeploymentChain {
+        Loan storage loan = _loanForOriginalAdapter(loanId);
+        if (loan.status != LoanStatus.CLOSING) revert InvalidLoanStatus();
+        if (
+            IERC1155(loan.outcomeToken).balanceOf(loan.executionWallet, loan.outcomeTokenId)
+                != loan.executionWalletBaselineShares
+        ) revert OutcomeSharesRemain();
+
+        PolymarketIsolatedMarginAccount(loan.custodyAccount).restorePosition();
+        loan.status = LoanStatus.ACTIVE;
+        emit LoanCloseRestored(loanId, loan.securedOutcomeShares);
+    }
+
+    function settleLoan(bytes32 loanId, bytes32 settlementRef)
         external
         nonReentrant
         onDeploymentChain
     {
-        Loan storage loan = _loanForAdapter(loanId);
-        if (loan.status != LoanStatus.ACTIVE) revert InvalidLoanStatus();
-        if (interestDue > _mulDiv(loan.borrowAssets, maximumInterestBps, BPS)) {
-            revert InvalidParameters();
-        }
+        Loan storage loan = _loanForOriginalAdapter(loanId);
+        if (loan.status != LoanStatus.CLOSING) revert InvalidLoanStatus();
         if (IERC1155(loan.outcomeToken).balanceOf(loan.custodyAccount, loan.outcomeTokenId) != 0) {
+            revert OutcomeSharesRemain();
+        }
+        if (
+            IERC1155(loan.outcomeToken).balanceOf(loan.executionWallet, loan.outcomeTokenId)
+                != loan.executionWalletBaselineShares
+        ) {
             revert OutcomeSharesRemain();
         }
 
@@ -743,8 +845,9 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
 
         uint256 principalRecovered = recovered < loan.borrowAssets ? recovered : loan.borrowAssets;
         uint256 remaining = recovered - principalRecovered;
-        uint256 interestRecovered = remaining < interestDue ? remaining : interestDue;
-        uint256 traderSurplus = remaining - interestRecovered;
+        uint256 financingFeeRecovered =
+            remaining < loan.financingFeeAssets ? remaining : loan.financingFeeAssets;
+        uint256 traderSurplus = remaining - financingFeeRecovered;
         uint256 badDebt = loan.borrowAssets - principalRecovered;
         uint256 reserveCover = protocolReserves < badDebt ? protocolReserves : badDebt;
 
@@ -752,10 +855,12 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         _removeExposure(loan.marketId, loan.trader, loan.borrowAssets);
         protocolReserves -= reserveCover;
         totalBadDebt += badDebt;
-        uint256 protocolFee = _mulDiv(interestRecovered, reserveFactorBps, BPS);
+        totalReserveLosses += reserveCover;
+        totalUncoveredBadDebt += badDebt - reserveCover;
+        uint256 protocolFee = _mulDiv(financingFeeRecovered, reserveFactorBps, BPS);
         accruedProtocolFees += protocolFee;
-        totalInterestCollected += interestRecovered;
-        emit ProtocolFeeAccrued(interestRecovered, protocolFee);
+        totalFinancingFeesCollected += financingFeeRecovered;
+        emit ProtocolFeeAccrued(financingFeeRecovered, protocolFee);
         if (traderSurplus > 0) _pushExact(loan.trader, traderSurplus);
 
         loan.status = LoanStatus.SETTLED;
@@ -763,7 +868,7 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         emit LoanSettled(
             loanId,
             principalRecovered,
-            interestRecovered,
+            financingFeeRecovered,
             reserveCover,
             badDebt,
             traderSurplus,
@@ -771,11 +876,16 @@ contract PolygonPusdLiquidityVault is IExecutionTargetRegistry {
         );
     }
 
-    function _loanForAdapter(bytes32 loanId) private view returns (Loan storage loan) {
+    function _loanForActiveAdapter(bytes32 loanId) private view returns (Loan storage loan) {
         loan = loans[loanId];
         if (loan.adapter != msg.sender || !authorizedAdapters[msg.sender]) {
             revert NotAuthorized();
         }
+    }
+
+    function _loanForOriginalAdapter(bytes32 loanId) private view returns (Loan storage loan) {
+        loan = loans[loanId];
+        if (loan.adapter != msg.sender) revert NotAuthorized();
     }
 
     function _checkOwner() private view {

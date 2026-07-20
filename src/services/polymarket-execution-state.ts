@@ -2,6 +2,8 @@ export const polymarketExecutionStates = [
   "AUTHORIZED",
   "RESERVED",
   "WALLET_DEPLOYING",
+  "WALLET_COMMIT_REQUIRED",
+  "WALLET_COMMITTED",
   "FUNDED",
   "ORDER_PREPARED",
   "ORDER_SUBMITTED",
@@ -20,7 +22,9 @@ export type PolymarketExecutionState = (typeof polymarketExecutionStates)[number
 const allowedTransitions: Record<PolymarketExecutionState, readonly PolymarketExecutionState[]> = {
   AUTHORIZED: ["RESERVED", "CANCELLED", "FAILED"],
   RESERVED: ["WALLET_DEPLOYING", "CANCELLED", "FAILED"],
-  WALLET_DEPLOYING: ["FUNDED", "FAILED", "RECONCILIATION_REQUIRED"],
+  WALLET_DEPLOYING: ["WALLET_COMMIT_REQUIRED", "FAILED", "RECONCILIATION_REQUIRED"],
+  WALLET_COMMIT_REQUIRED: ["WALLET_COMMITTED", "FAILED", "RECONCILIATION_REQUIRED"],
+  WALLET_COMMITTED: ["FUNDED", "FAILED", "RECONCILIATION_REQUIRED"],
   FUNDED: ["ORDER_PREPARED", "FAILED", "RECONCILIATION_REQUIRED"],
   ORDER_PREPARED: ["ORDER_SUBMITTED", "FAILED", "RECONCILIATION_REQUIRED"],
   ORDER_SUBMITTED: ["FILL_CONFIRMED", "FAILED", "RECONCILIATION_REQUIRED"],
@@ -31,6 +35,8 @@ const allowedTransitions: Record<PolymarketExecutionState, readonly PolymarketEx
   RECONCILIATION_REQUIRED: [
     "RESERVED",
     "WALLET_DEPLOYING",
+    "WALLET_COMMIT_REQUIRED",
+    "WALLET_COMMITTED",
     "FUNDED",
     "ORDER_PREPARED",
     "ORDER_SUBMITTED",
@@ -177,6 +183,72 @@ export function calculateFokSellPriceLimit(
   }
 
   return formatSixDecimalAssets(bounded);
+}
+
+export function quoteFokSellFromBids(input: {
+  amountShares: string;
+  bids: readonly { price: string; size: string }[];
+  builderFeeBps: number;
+  feeRateBps: number;
+  maxSlippageBps: number;
+  tickSize: string;
+}) {
+  const requestedShares = parseSixDecimalAssets(input.amountShares, "amountShares");
+  if (requestedShares === 0n) throw new Error("Close amount must be positive");
+  if (!Number.isInteger(input.feeRateBps) || input.feeRateBps < 0 || input.feeRateBps > 10_000) {
+    throw new Error("CLOB fee rate is outside the supported range");
+  }
+  if (
+    !Number.isInteger(input.builderFeeBps) ||
+    input.builderFeeBps < 0 ||
+    input.builderFeeBps > 100
+  ) {
+    throw new Error("Builder taker fee is outside the supported range");
+  }
+
+  const bids = input.bids
+    .map((level) => ({
+      price: parseSixDecimalAssets(level.price, "bid.price"),
+      size: parseSixDecimalAssets(level.size, "bid.size"),
+    }))
+    .filter((level) => level.price > 0n && level.price < assetScale && level.size > 0n)
+    .sort((left, right) => (left.price === right.price ? 0 : left.price > right.price ? -1 : 1));
+
+  let remaining = requestedShares;
+  let estimatedGross = 0n;
+  let depthFloor = 0n;
+  for (const level of bids) {
+    const filled = level.size < remaining ? level.size : remaining;
+    estimatedGross += (filled * level.price) / assetScale;
+    remaining -= filled;
+    depthFloor = level.price;
+    if (remaining === 0n) break;
+  }
+  if (remaining !== 0n || depthFloor === 0n) {
+    throw new Error("Live bid depth cannot close the full position");
+  }
+
+  const priceLimit = calculateFokSellPriceLimit(
+    formatSixDecimalAssets(depthFloor),
+    input.maxSlippageBps,
+    input.tickSize,
+  );
+  const priceLimitUnits = parseSixDecimalAssets(priceLimit, "priceLimit");
+  const grossFloor = (requestedShares * priceLimitUnits) / assetScale;
+  const maximumPlatformFee = divideUp(requestedShares * BigInt(input.feeRateBps), 4n * bps);
+  const maximumBuilderFee = divideUp(grossFloor * BigInt(input.builderFeeBps), bps);
+  const maximumVenueFee = maximumPlatformFee + maximumBuilderFee;
+  if (maximumVenueFee >= grossFloor) {
+    throw new Error("Venue fee assumptions leave no positive close proceeds");
+  }
+
+  return {
+    depthFloorPrice: formatSixDecimalAssets(depthFloor),
+    estimatedGrossProceeds: formatSixDecimalAssets(estimatedGross),
+    maximumVenueFeeAssets: formatSixDecimalAssets(maximumVenueFee),
+    minimumProceeds: formatSixDecimalAssets(grossFloor - maximumVenueFee),
+    priceLimit,
+  };
 }
 
 export type ClobTradeEvidence = {

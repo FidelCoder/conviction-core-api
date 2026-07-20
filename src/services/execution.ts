@@ -77,7 +77,7 @@ export async function getExecutionCapabilities() {
   const adapterRuntime = getAdapterRuntime();
   const polymarketReadiness =
     env.convictionExecutionMode === "polymarket" ? await getPolymarketExecutionReadiness() : null;
-  const executionReady = polymarketReadiness?.productionVenueFillEnabled ?? adapterRuntime.ready;
+  const executionReady = polymarketReadiness?.venueFillEnabled ?? adapterRuntime.ready;
   const activeAdapters = executionReady ? [adapterRuntime.adapterId] : [];
   const chains = supportedIntentChains.map((chain) => {
     const isPolymarketPolygon =
@@ -90,7 +90,7 @@ export async function getExecutionCapabilities() {
       vaultAddress: isPolymarketPolygon ? env.polymarketPusdVaultAddress : chain.vaultAddress,
       walletFlowEnabled,
       marginExecutionEnabled: isPolymarketPolygon
-        ? polymarketReadiness?.productionVenueFillEnabled === true
+        ? polymarketReadiness?.venueFillEnabled === true
         : adapterRuntime.ready &&
           chain.network === "testnet" &&
           walletFlowEnabled &&
@@ -119,8 +119,10 @@ export async function getExecutionCapabilities() {
     contractLayer: {
       status: polymarketReadiness
         ? polymarketReadiness.productionVenueFillEnabled
-          ? "POLYGON_PUSD_CANARY_READY"
-          : "POLYGON_PUSD_BLOCKED"
+          ? "POLYGON_PUSD_READY"
+          : polymarketReadiness.canaryVenueFillEnabled
+            ? "POLYGON_PUSD_CANARY_READY"
+            : "POLYGON_PUSD_BLOCKED"
         : hasActiveVault
           ? adapterRuntime.ready
             ? "TESTNET_VAULT_ADAPTER_READY"
@@ -141,8 +143,10 @@ export async function getExecutionCapabilities() {
     },
     recommendation: polymarketReadiness
       ? polymarketReadiness.productionVenueFillEnabled
-        ? "Run a capped open-secure-close-repay canary before enabling production limits."
-        : `Production execution is blocked: ${polymarketReadiness.missing.join(" ")}`
+        ? "Production execution gates are healthy. Keep risk caps conservative and monitor every lifecycle stage."
+        : polymarketReadiness.canaryVenueFillEnabled
+          ? "Run the capped open-secure-close-repay canary before enabling production limits."
+          : `Polymarket execution is blocked: ${polymarketReadiness.missing.join(" ")}`
       : adapterRuntime.ready
         ? "Testnet adapter settlement is enabled. Do not describe it as a live venue fill."
         : "Record user intents now. Enable an adapter signer before showing positions as executed.",
@@ -173,7 +177,7 @@ export async function getExecutionReadiness() {
 
   const polymarketReadiness =
     env.convictionExecutionMode === "polymarket" ? await getPolymarketExecutionReadiness() : null;
-  if (polymarketReadiness && !polymarketReadiness.productionVenueFillEnabled) {
+  if (polymarketReadiness && !polymarketReadiness.venueFillEnabled) {
     missing.push(...polymarketReadiness.missing);
   }
 
@@ -218,7 +222,7 @@ export async function getExecutionReadiness() {
       label: "Settle adapter execution",
       ready:
         env.convictionExecutionMode === "polymarket"
-          ? polymarketReadiness?.productionVenueFillEnabled === true
+          ? polymarketReadiness?.venueFillEnabled === true
           : adapterRuntime.ready,
       testEndpoint: "POST /execution/positions/:positionId/settle",
       note: adapterRuntime.message,
@@ -227,19 +231,21 @@ export async function getExecutionReadiness() {
 
   return {
     status: polymarketReadiness?.productionVenueFillEnabled
-      ? "PRODUCTION_CANARY_READY"
-      : adapterRuntime.ready
-        ? "ADAPTER_READY"
-        : walletFlowChains.length > 0
-          ? "WALLET_FLOW_READY"
-          : "BLOCKED",
+      ? "PRODUCTION_READY"
+      : polymarketReadiness?.canaryVenueFillEnabled
+        ? "PRODUCTION_CANARY_READY"
+        : adapterRuntime.ready
+          ? "ADAPTER_READY"
+          : walletFlowChains.length > 0
+            ? "WALLET_FLOW_READY"
+            : "BLOCKED",
     canCreateMarginIntent: true,
     canPrepareWalletTransactions: walletFlowChains.length > 0,
-    canSettleAdapterExecution:
-      polymarketReadiness?.productionVenueFillEnabled ?? adapterRuntime.ready,
+    canSettleAdapterExecution: polymarketReadiness?.venueFillEnabled ?? adapterRuntime.ready,
     canClaimRealMarketFill:
-      polymarketReadiness?.productionVenueFillEnabled === true ||
+      polymarketReadiness?.venueFillEnabled === true ||
       (adapterRuntime.ready && env.convictionExecutionMode === "testnet"),
+    canaryVenueFillEnabled: polymarketReadiness?.canaryVenueFillEnabled ?? false,
     productionVenueFillEnabled: polymarketReadiness?.productionVenueFillEnabled ?? false,
     adapter: {
       id: adapterRuntime.adapterId,
@@ -251,8 +257,10 @@ export async function getExecutionReadiness() {
     stages,
     supportedChains: capabilities.chains,
     warning: polymarketReadiness?.productionVenueFillEnabled
-      ? "Production remains canary-capped. A position becomes EXECUTED only after CLOB trades, Polygon receipts, ERC-1155 custody, and vault activation all reconcile."
-      : "A Conviction position should only show EXECUTED after adapter settlement confirms. Wallet approval, deposit, and margin intent transactions are not venue fills.",
+      ? "A position becomes EXECUTED only after CLOB trades, Polygon receipts, ERC-1155 custody, and vault activation all reconcile."
+      : polymarketReadiness?.canaryVenueFillEnabled
+        ? `Real venue fills are capped at ${env.polymarketCanaryMaxAssets} pUSD until the open-secure-close-repay canary passes.`
+        : "A Conviction position should only show EXECUTED after adapter settlement confirms. Wallet approval, deposit, and margin intent transactions are not venue fills.",
   };
 }
 

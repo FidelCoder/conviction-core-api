@@ -116,7 +116,57 @@ contract MockPolymarketVenue is IERC1155Receiver {
     }
 }
 
+contract MockExecutionWallet is IERC1155Receiver {
+    MockPusd public immutable pusd;
+    MockOutcome1155 public immutable outcome;
+
+    constructor(MockPusd pusd_, MockOutcome1155 outcome_) {
+        pusd = pusd_;
+        outcome = outcome_;
+    }
+
+    function sellAndReturn(
+        MockPolymarketVenue venue,
+        uint256 tokenId,
+        uint256 shares,
+        uint256 proceeds,
+        address custody
+    ) external {
+        outcome.setApprovalForAll(address(venue), true);
+        venue.sell(tokenId, shares, proceeds);
+        require(pusd.transfer(custody, proceeds), "return proceeds");
+    }
+
+    function returnShares(address custody, uint256 tokenId, uint256 shares) external {
+        outcome.safeTransferFrom(address(this), custody, tokenId, shares, bytes(""));
+    }
+
+    function onERC1155Received(address, address, uint256, uint256, bytes calldata)
+        external
+        pure
+        returns (bytes4)
+    {
+        return IERC1155Receiver.onERC1155Received.selector;
+    }
+
+    function onERC1155BatchReceived(
+        address,
+        address,
+        uint256[] calldata,
+        uint256[] calldata,
+        bytes calldata
+    ) external pure returns (bytes4) {
+        return IERC1155Receiver.onERC1155BatchReceived.selector;
+    }
+}
+
 contract MarginAdapter {
+    function commitWallet(PolygonPusdLiquidityVault vault, bytes32 loanId, address executionWallet)
+        external
+    {
+        vault.commitExecutionWallet(loanId, executionWallet);
+    }
+
     function fund(PolygonPusdLiquidityVault vault, bytes32 loanId) external {
         vault.fundLoan(loanId);
     }
@@ -152,13 +202,18 @@ contract MarginAdapter {
         vault.failLoan(loanId, reasonCode);
     }
 
-    function settle(
-        PolygonPusdLiquidityVault vault,
-        bytes32 loanId,
-        uint256 interestDue,
-        bytes32 settlementRef
-    ) external {
-        vault.settleLoan(loanId, interestDue, settlementRef);
+    function beginClose(PolygonPusdLiquidityVault vault, bytes32 loanId) external {
+        vault.beginLoanClose(loanId);
+    }
+
+    function restoreClose(PolygonPusdLiquidityVault vault, bytes32 loanId) external {
+        vault.restoreLoanAfterFailedClose(loanId);
+    }
+
+    function settle(PolygonPusdLiquidityVault vault, bytes32 loanId, bytes32 settlementRef)
+        external
+    {
+        vault.settleLoan(loanId, settlementRef);
     }
 }
 
@@ -180,6 +235,22 @@ contract ExternalCaller {
     }
 }
 
+contract VaultRoleCaller {
+    function pause(PolygonPusdLiquidityVault vault) external {
+        vault.pause();
+    }
+
+    function unpause(PolygonPusdLiquidityVault vault) external {
+        vault.setPaused(false);
+    }
+
+    function setRisk(PolygonPusdLiquidityVault vault, uint256 marketCap, uint256 accountCap)
+        external
+    {
+        vault.setRiskParameters(2_000, 2_000, 5_000, marketCap, accountCap);
+    }
+}
+
 contract PolygonPusdLiquidityVaultTest {
     uint256 private constant UNIT = 1e6;
     uint256 private constant TOKEN_ID = 42;
@@ -190,12 +261,14 @@ contract PolygonPusdLiquidityVaultTest {
     MockPolymarketVenue private venue;
     PolygonPusdLiquidityVault private vault;
     MarginAdapter private adapter;
+    MockExecutionWallet private executionWallet;
 
     function setUp() public {
         pusd = new MockPusd();
         outcome = new MockOutcome1155();
         venue = new MockPolymarketVenue(pusd, outcome);
         adapter = new MarginAdapter();
+        executionWallet = new MockExecutionWallet(pusd, outcome);
         vault = new PolygonPusdLiquidityVault(address(pusd), address(this), block.chainid);
         vault.setAdapter(address(adapter), true);
         vault.setExecutionTarget(address(venue), true);
@@ -272,6 +345,7 @@ contract PolygonPusdLiquidityVaultTest {
     function testLoanCannotActivateBeforeOutcomeSharesAreSecured() public {
         vault.deposit(1_000 * UNIT, address(this));
         (bytes32 loanId,) = _reserve(100 * UNIT, 100 * UNIT, 100 * UNIT);
+        vault.commitExecutionWallet(loanId, address(executionWallet));
         adapter.fund(vault, loanId);
 
         bool reverted;
@@ -283,10 +357,34 @@ contract PolygonPusdLiquidityVaultTest {
         _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.EXECUTING);
     }
 
+    function testTraderMustCommitExecutionWalletBeforeAdapterFunding() public {
+        vault.deposit(1_000 * UNIT, address(this));
+        (bytes32 loanId,) = _reserve(100 * UNIT, 100 * UNIT, 100 * UNIT);
+
+        bool fundingReverted;
+        try adapter.fund(vault, loanId) { }
+        catch {
+            fundingReverted = true;
+        }
+        require(fundingReverted, "uncommitted loan funded");
+
+        bool adapterCommitReverted;
+        try adapter.commitWallet(vault, loanId, address(executionWallet)) { }
+        catch {
+            adapterCommitReverted = true;
+        }
+        require(adapterCommitReverted, "adapter committed execution wallet");
+
+        vault.commitExecutionWallet(loanId, address(executionWallet));
+        adapter.fund(vault, loanId);
+        _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.EXECUTING);
+    }
+
     function testExecutionFailureReturnsFundsAndReleasesLiquidity() public {
         vault.deposit(1_000 * UNIT, address(this));
         uint256 traderBalanceBefore = pusd.balanceOf(address(this));
         (bytes32 loanId,) = _reserve(100 * UNIT, 100 * UNIT, 100 * UNIT);
+        vault.commitExecutionWallet(loanId, address(executionWallet));
         adapter.fund(vault, loanId);
         adapter.fail(vault, loanId, keccak256("NO_FILL"));
 
@@ -300,7 +398,7 @@ contract PolygonPusdLiquidityVaultTest {
     function testActiveLoanSecuresSharesAndSettlesWithYield() public {
         vault.deposit(1_000 * UNIT, address(this));
         (bytes32 loanId, PolymarketIsolatedMarginAccount account) =
-            _fundAndBuy(100 * UNIT, 100 * UNIT, 180 * UNIT, 180 * UNIT);
+            _fundAndBuyWithFee(100 * UNIT, 100 * UNIT, 180 * UNIT, 180 * UNIT, 10 * UNIT);
 
         adapter.activate(vault, loanId, 180 * UNIT, keccak256("fill"));
         _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.ACTIVE);
@@ -308,19 +406,13 @@ contract PolygonPusdLiquidityVaultTest {
         require(vault.totalBorrowedAssets() == 80 * UNIT, "unused borrow not returned");
         require(vault.totalAssets() == 1_000 * UNIT, "funding changed lp assets");
 
-        adapter.approveOutcome(account, address(venue), true);
-        adapter.execute(
-            account,
-            address(venue),
-            abi.encodeCall(MockPolymarketVenue.sell, (TOKEN_ID, 180 * UNIT, 220 * UNIT))
-        );
-        adapter.settle(vault, loanId, 10 * UNIT, keccak256("close"));
+        _closeAndSettle(loanId, account, 180 * UNIT, 220 * UNIT, keccak256("close"));
 
         _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.SETTLED);
         require(vault.totalBorrowedAssets() == 0, "debt remains");
         require(vault.accruedProtocolFees() == 2 * UNIT, "protocol fee");
         require(vault.protocolReserves() == 0, "fee silently moved to reserve");
-        require(vault.totalInterestCollected() == 10 * UNIT, "interest metric");
+        require(vault.totalFinancingFeesCollected() == 10 * UNIT, "fee metric");
         require(vault.totalAssets() == 1_008 * UNIT, "lp yield");
         require(vault.marketExposure(MARKET_ID) == 0, "exposure remains");
     }
@@ -328,15 +420,9 @@ contract PolygonPusdLiquidityVaultTest {
     function testProtocolFeesRequireExplicitReserveAllocation() public {
         vault.deposit(1_000 * UNIT, address(this));
         (bytes32 loanId, PolymarketIsolatedMarginAccount account) =
-            _fundAndBuy(100 * UNIT, 100 * UNIT, 200 * UNIT, 200 * UNIT);
+            _fundAndBuyWithFee(100 * UNIT, 100 * UNIT, 200 * UNIT, 200 * UNIT, 10 * UNIT);
         adapter.activate(vault, loanId, 200 * UNIT, keccak256("fill"));
-        adapter.approveOutcome(account, address(venue), true);
-        adapter.execute(
-            account,
-            address(venue),
-            abi.encodeCall(MockPolymarketVenue.sell, (TOKEN_ID, 200 * UNIT, 210 * UNIT))
-        );
-        adapter.settle(vault, loanId, 10 * UNIT, keccak256("close"));
+        _closeAndSettle(loanId, account, 200 * UNIT, 210 * UNIT, keccak256("close"));
 
         vault.allocateProtocolFeesToReserve(2 * UNIT);
         require(vault.accruedProtocolFees() == 0, "fee remains");
@@ -350,16 +436,11 @@ contract PolygonPusdLiquidityVaultTest {
         (bytes32 loanId, PolymarketIsolatedMarginAccount account) =
             _fundAndBuy(100 * UNIT, 100 * UNIT, 200 * UNIT, 200 * UNIT);
         adapter.activate(vault, loanId, 200 * UNIT, keccak256("fill"));
-
-        adapter.approveOutcome(account, address(venue), true);
-        adapter.execute(
-            account,
-            address(venue),
-            abi.encodeCall(MockPolymarketVenue.sell, (TOKEN_ID, 200 * UNIT, 40 * UNIT))
-        );
-        adapter.settle(vault, loanId, 0, keccak256("loss"));
+        _closeAndSettle(loanId, account, 200 * UNIT, 40 * UNIT, keccak256("loss"));
 
         require(vault.totalBadDebt() == 60 * UNIT, "gross bad debt");
+        require(vault.totalReserveLosses() == 50 * UNIT, "reserve loss");
+        require(vault.totalUncoveredBadDebt() == 10 * UNIT, "uncovered debt");
         require(vault.protocolReserves() == 0, "reserve not consumed");
         require(vault.totalAssets() == 990 * UNIT, "waterfall mismatch");
     }
@@ -374,13 +455,7 @@ contract PolygonPusdLiquidityVaultTest {
         uint256 processed = vault.processRedemptionQueue(1);
         require(processed == 0, "illiquid redemption processed");
 
-        adapter.approveOutcome(account, address(venue), true);
-        adapter.execute(
-            account,
-            address(venue),
-            abi.encodeCall(MockPolymarketVenue.sell, (TOKEN_ID, 200 * UNIT, 200 * UNIT))
-        );
-        adapter.settle(vault, loanId, 0, keccak256("close"));
+        _closeAndSettle(loanId, account, 200 * UNIT, 200 * UNIT, keccak256("close"));
         processed = vault.processRedemptionQueue(1);
         require(processed == 1, "redemption not processed");
 
@@ -411,7 +486,93 @@ contract PolygonPusdLiquidityVaultTest {
             targetReverted = true;
         }
         require(targetReverted, "unallowlisted target executed");
+
+        bool activeVenueReverted;
+        try adapter.execute(
+            account, address(venue), abi.encodeCall(MockPolymarketVenue.sell, (TOKEN_ID, 1, 1))
+        ) { }
+        catch {
+            activeVenueReverted = true;
+        }
+        require(activeVenueReverted, "active custody allowed arbitrary venue call");
         require(outcome.balanceOf(address(account), TOKEN_ID) == 200 * UNIT, "shares moved");
+    }
+
+    function testCloseNoFillReturnsSharesAndRestoresActiveLoan() public {
+        vault.deposit(1_000 * UNIT, address(this));
+        (bytes32 loanId, PolymarketIsolatedMarginAccount account) =
+            _fundAndBuy(100 * UNIT, 100 * UNIT, 200 * UNIT, 200 * UNIT);
+        adapter.activate(vault, loanId, 200 * UNIT, keccak256("fill"));
+
+        adapter.beginClose(vault, loanId);
+        _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.CLOSING);
+        require(
+            outcome.balanceOf(address(executionWallet), TOKEN_ID) == 200 * UNIT,
+            "close shares not released"
+        );
+
+        executionWallet.returnShares(address(account), TOKEN_ID, 200 * UNIT);
+        adapter.restoreClose(vault, loanId);
+        _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.ACTIVE);
+        require(outcome.balanceOf(address(account), TOKEN_ID) == 200 * UNIT, "shares not restored");
+    }
+
+    function testDeauthorizedAdapterCanCloseExistingRiskButCannotOpenNewRisk() public {
+        vault.deposit(1_000 * UNIT, address(this));
+        (bytes32 loanId, PolymarketIsolatedMarginAccount account) =
+            _fundAndBuy(100 * UNIT, 100 * UNIT, 200 * UNIT, 200 * UNIT);
+        adapter.activate(vault, loanId, 200 * UNIT, keccak256("fill"));
+        vault.setAdapter(address(adapter), false);
+
+        _closeAndSettle(loanId, account, 200 * UNIT, 200 * UNIT, keccak256("close"));
+        _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.SETTLED);
+
+        bool reserveReverted;
+        try this.reserveForTest(50 * UNIT, 50 * UNIT, 50 * UNIT) { }
+        catch {
+            reserveReverted = true;
+        }
+        require(reserveReverted, "deauthorized adapter opened new risk");
+    }
+
+    function testPausePreservesRiskReducingCloseAndSettlement() public {
+        vault.deposit(1_000 * UNIT, address(this));
+        (bytes32 loanId, PolymarketIsolatedMarginAccount account) =
+            _fundAndBuy(100 * UNIT, 100 * UNIT, 200 * UNIT, 200 * UNIT);
+        adapter.activate(vault, loanId, 200 * UNIT, keccak256("fill"));
+        vault.setPaused(true);
+
+        _closeAndSettle(loanId, account, 200 * UNIT, 200 * UNIT, keccak256("paused-close"));
+        _assertLoanStatus(loanId, PolygonPusdLiquidityVault.LoanStatus.SETTLED);
+    }
+
+    function testGuardianAndRiskManagerHaveSeparatedLeastPrivilegeRoles() public {
+        VaultRoleCaller guardian = new VaultRoleCaller();
+        VaultRoleCaller riskManager = new VaultRoleCaller();
+        vault.setGuardian(address(guardian));
+        vault.setRiskManager(address(riskManager));
+
+        guardian.pause(vault);
+        require(vault.paused(), "guardian did not pause");
+
+        bool guardianUnpauseReverted;
+        try guardian.unpause(vault) { }
+        catch {
+            guardianUnpauseReverted = true;
+        }
+        require(guardianUnpauseReverted, "guardian unpaused vault");
+
+        vault.setPaused(false);
+        riskManager.setRisk(vault, 600 * UNIT, 400 * UNIT);
+        require(vault.defaultMarketExposureCap() == 600 * UNIT, "risk manager market cap");
+        require(vault.accountExposureCap() == 400 * UNIT, "risk manager account cap");
+
+        bool guardianRiskReverted;
+        try guardian.setRisk(vault, 700 * UNIT, 500 * UNIT) { }
+        catch {
+            guardianRiskReverted = true;
+        }
+        require(guardianRiskReverted, "guardian changed risk parameters");
     }
 
     function testExposureAndIdleReserveCapsAreEnforced() public {
@@ -453,9 +614,20 @@ contract PolygonPusdLiquidityVaultTest {
         private
         returns (bytes32 loanId, PolymarketIsolatedMarginAccount account)
     {
+        return _fundAndBuyWithFee(equity, borrowed, spent, outcomeShares, 0);
+    }
+
+    function _fundAndBuyWithFee(
+        uint256 equity,
+        uint256 borrowed,
+        uint256 spent,
+        uint256 outcomeShares,
+        uint256 financingFee
+    ) private returns (bytes32 loanId, PolymarketIsolatedMarginAccount account) {
         address custody;
-        (loanId, custody) = _reserve(equity, borrowed, outcomeShares);
+        (loanId, custody) = _reserveWithFee(equity, borrowed, outcomeShares, financingFee);
         account = PolymarketIsolatedMarginAccount(custody);
+        vault.commitExecutionWallet(loanId, address(executionWallet));
         adapter.fund(vault, loanId);
         adapter.approveAsset(account, address(venue), equity + borrowed);
         adapter.execute(
@@ -469,7 +641,16 @@ contract PolygonPusdLiquidityVaultTest {
         private
         returns (bytes32 loanId, address custody)
     {
-        return _reserveForMarket(MARKET_ID, equity, borrowed, minimumShares);
+        return _reserveWithFee(equity, borrowed, minimumShares, 0);
+    }
+
+    function _reserveWithFee(
+        uint256 equity,
+        uint256 borrowed,
+        uint256 minimumShares,
+        uint256 financingFee
+    ) private returns (bytes32 loanId, address custody) {
+        return _reserveForMarketWithFee(MARKET_ID, equity, borrowed, minimumShares, financingFee);
     }
 
     function _reserveForMarket(
@@ -477,6 +658,16 @@ contract PolygonPusdLiquidityVaultTest {
         uint256 equity,
         uint256 borrowed,
         uint256 minimumShares
+    ) private returns (bytes32 loanId, address custody) {
+        return _reserveForMarketWithFee(marketId, equity, borrowed, minimumShares, 0);
+    }
+
+    function _reserveForMarketWithFee(
+        bytes32 marketId,
+        uint256 equity,
+        uint256 borrowed,
+        uint256 minimumShares,
+        uint256 financingFee
     ) private returns (bytes32 loanId, address custody) {
         PolygonPusdLiquidityVault.LoanRequest memory request =
             PolygonPusdLiquidityVault.LoanRequest({
@@ -487,6 +678,7 @@ contract PolygonPusdLiquidityVaultTest {
                 outcomeToken: address(outcome),
                 outcomeTokenId: TOKEN_ID,
                 minimumOutcomeShares: minimumShares,
+                financingFeeAssets: financingFee,
                 deadline: block.timestamp + 1 days
             });
         return vault.reserveLoan(request);
@@ -496,7 +688,18 @@ contract PolygonPusdLiquidityVaultTest {
         private
         view
     {
-        (,,,,,,,,,,,, PolygonPusdLiquidityVault.LoanStatus status,,) = vault.loans(loanId);
-        require(status == expected, "loan status");
+        require(vault.loanStatus(loanId) == expected, "loan status");
+    }
+
+    function _closeAndSettle(
+        bytes32 loanId,
+        PolymarketIsolatedMarginAccount account,
+        uint256 shares,
+        uint256 proceeds,
+        bytes32 settlementRef
+    ) private {
+        adapter.beginClose(vault, loanId);
+        executionWallet.sellAndReturn(venue, TOKEN_ID, shares, proceeds, address(account));
+        adapter.settle(vault, loanId, settlementRef);
     }
 }

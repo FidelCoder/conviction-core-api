@@ -64,7 +64,23 @@ const envSchema = z.object({
   POLYMARKET_CTF_ADDRESS: optionalEvmAddress,
   POLYMARKET_EXCHANGE_V2_ADDRESS: optionalEvmAddress,
   POLYMARKET_NEG_RISK_EXCHANGE_V2_ADDRESS: optionalEvmAddress,
+  POLYMARKET_NEG_RISK_ADAPTER_ADDRESS: optionalEvmAddress,
   POLYMARKET_DEPOSIT_WALLET_FACTORY_ADDRESS: optionalEvmAddress,
+  POLYMARKET_GOVERNANCE_ADDRESS: optionalEvmAddress,
+  POLYMARKET_GUARDIAN_ADDRESS: optionalEvmAddress,
+  POLYMARKET_RISK_MANAGER_ADDRESS: optionalEvmAddress,
+  POLYMARKET_LIFECYCLE_ENABLED: optionalBoolean.default(false),
+  POLYMARKET_CANARY_PASSED: optionalBoolean.default(false),
+  POLYMARKET_CANARY_MAX_ASSETS: z
+    .string()
+    .regex(/^\d+(?:\.\d{1,6})?$/)
+    .default("5"),
+  POLYMARKET_DIRECT_LIQUIDATION_MAX_ASSETS: z
+    .string()
+    .regex(/^\d+(?:\.\d{1,6})?$/)
+    .default("250"),
+  POLYMARKET_MIN_RESERVE_BPS: z.coerce.number().int().min(0).max(10_000).default(1_000),
+  POLYMARKET_BUILDER_TAKER_FEE_BPS: z.coerce.number().int().min(0).max(100).default(0),
   POLYMARKET_RELAYER_API_URL: z.string().url().default("https://relayer-v2.polymarket.com"),
   POLYMARKET_RELAYER_API_KEY: z.string().min(1).optional(),
   POLYMARKET_RELAYER_API_KEY_ADDRESS: optionalEvmAddress,
@@ -137,8 +153,18 @@ export const env = {
   polymarketExchangeV2Address: parsedEnv.data.POLYMARKET_EXCHANGE_V2_ADDRESS ?? null,
   polymarketNegRiskExchangeV2Address:
     parsedEnv.data.POLYMARKET_NEG_RISK_EXCHANGE_V2_ADDRESS ?? null,
+  polymarketNegRiskAdapterAddress: parsedEnv.data.POLYMARKET_NEG_RISK_ADAPTER_ADDRESS ?? null,
   polymarketDepositWalletFactoryAddress:
     parsedEnv.data.POLYMARKET_DEPOSIT_WALLET_FACTORY_ADDRESS ?? null,
+  polymarketGovernanceAddress: parsedEnv.data.POLYMARKET_GOVERNANCE_ADDRESS ?? null,
+  polymarketGuardianAddress: parsedEnv.data.POLYMARKET_GUARDIAN_ADDRESS ?? null,
+  polymarketRiskManagerAddress: parsedEnv.data.POLYMARKET_RISK_MANAGER_ADDRESS ?? null,
+  polymarketLifecycleEnabled: parsedEnv.data.POLYMARKET_LIFECYCLE_ENABLED,
+  polymarketCanaryPassed: parsedEnv.data.POLYMARKET_CANARY_PASSED,
+  polymarketCanaryMaxAssets: parsedEnv.data.POLYMARKET_CANARY_MAX_ASSETS,
+  polymarketDirectLiquidationMaxAssets: parsedEnv.data.POLYMARKET_DIRECT_LIQUIDATION_MAX_ASSETS,
+  polymarketMinReserveBps: parsedEnv.data.POLYMARKET_MIN_RESERVE_BPS,
+  polymarketBuilderTakerFeeBps: parsedEnv.data.POLYMARKET_BUILDER_TAKER_FEE_BPS,
   polymarketRelayerApiUrl: parsedEnv.data.POLYMARKET_RELAYER_API_URL,
   polymarketRelayerApiKey: parsedEnv.data.POLYMARKET_RELAYER_API_KEY ?? null,
   polymarketRelayerApiKeyAddress: parsedEnv.data.POLYMARKET_RELAYER_API_KEY_ADDRESS ?? null,

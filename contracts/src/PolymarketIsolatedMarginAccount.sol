@@ -14,6 +14,7 @@ contract PolymarketIsolatedMarginAccount is IERC1155Receiver {
     enum Phase {
         SETUP,
         ACTIVE,
+        CLOSING,
         FINALIZED
     }
 
@@ -31,6 +32,8 @@ contract PolymarketIsolatedMarginAccount is IERC1155Receiver {
     event OutcomeApprovalUpdated(address indexed venue, bool approved);
     event VenueCallExecuted(address indexed venue, bytes4 indexed selector);
     event PositionSecured(uint256 shares);
+    event PositionCloseStarted(address indexed executionWallet, uint256 shares);
+    event PositionCloseRestored(uint256 shares);
     event PositionFinalized();
     event AssetReturned(uint256 amount);
     event OutcomeReleased(address indexed recipient, uint256 amount);
@@ -78,13 +81,13 @@ contract PolymarketIsolatedMarginAccount is IERC1155Receiver {
     }
 
     function approveAssetForVenue(address venue, uint256 amount) external onlyAdapter {
-        _requireOpenAndAllowed(venue);
+        _requireSetupAndAllowed(venue);
         _callOptionalReturn(asset, abi.encodeCall(IERC20.approve, (venue, amount)));
         emit AssetApprovalUpdated(venue, amount);
     }
 
     function approveOutcomeForVenue(address venue, bool approved) external onlyAdapter {
-        _requireOpenAndAllowed(venue);
+        _requireSetupAndAllowed(venue);
         IERC1155(outcomeToken).setApprovalForAll(venue, approved);
         emit OutcomeApprovalUpdated(venue, approved);
     }
@@ -94,7 +97,7 @@ contract PolymarketIsolatedMarginAccount is IERC1155Receiver {
         onlyAdapter
         returns (bytes memory result)
     {
-        _requireOpenAndAllowed(venue);
+        _requireSetupAndAllowed(venue);
         if (data.length < 4) revert TargetNotAllowed();
 
         (bool success, bytes memory returndata) = venue.call(data);
@@ -122,6 +125,35 @@ contract PolymarketIsolatedMarginAccount is IERC1155Receiver {
         pledgedShares = shares;
         phase = Phase.ACTIVE;
         emit PositionSecured(shares);
+    }
+
+    function beginClose(address executionWallet) external onlyController {
+        if (phase != Phase.ACTIVE) revert InvalidPhase();
+        if (executionWallet == address(0) || executionWallet.code.length == 0) {
+            revert InvalidAddress();
+        }
+        uint256 shares = pledgedShares;
+        if (
+            shares == 0 || IERC1155(outcomeToken).balanceOf(address(this), outcomeTokenId) != shares
+        ) {
+            revert UnsecuredPosition();
+        }
+
+        phase = Phase.CLOSING;
+        IERC1155(outcomeToken)
+            .safeTransferFrom(address(this), executionWallet, outcomeTokenId, shares, bytes(""));
+        emit PositionCloseStarted(executionWallet, shares);
+    }
+
+    function restorePosition() external onlyController {
+        if (phase != Phase.CLOSING) revert InvalidPhase();
+        if (
+            pledgedShares == 0
+                || IERC1155(outcomeToken).balanceOf(address(this), outcomeTokenId) != pledgedShares
+        ) revert UnsecuredPosition();
+
+        phase = Phase.ACTIVE;
+        emit PositionCloseRestored(pledgedShares);
     }
 
     function finalizePosition() external onlyController {
@@ -187,8 +219,8 @@ contract PolymarketIsolatedMarginAccount is IERC1155Receiver {
         return interfaceId == type(IERC1155Receiver).interfaceId || interfaceId == 0x01ffc9a7;
     }
 
-    function _requireOpenAndAllowed(address venue) private view {
-        if (phase == Phase.FINALIZED) revert AccountAlreadyFinalized();
+    function _requireSetupAndAllowed(address venue) private view {
+        if (phase != Phase.SETUP) revert InvalidPhase();
         if (venue == address(0)) revert InvalidAddress();
         if (!IExecutionTargetRegistry(controller).isExecutionTargetAllowed(venue)) {
             revert TargetNotAllowed();

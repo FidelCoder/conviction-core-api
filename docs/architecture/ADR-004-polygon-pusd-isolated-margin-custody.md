@@ -29,11 +29,18 @@ outcome, token id, adapter, and loan.
 
 - It accepts only the configured ERC-1155 outcome token and token id.
 - It has no generic trader or operator withdrawal function.
-- Only its immutable adapter can call execution targets.
+- Only its immutable adapter can call execution targets, and only before the
+  position becomes active.
 - The vault owner must explicitly allow each execution target.
 - The account can approve only an allowed venue.
 - The vault activates debt only after the configured outcome balance is present.
+- Before funding, the trader must commit the generated Polymarket deposit wallet
+  to the reserved loan in a Polygon transaction. The adapter cannot choose or
+  replace that wallet.
 - Outcome shares cannot be released while the position is active.
+- A close moves exactly the pledged shares to the loan's precommitted deposit
+  wallet. The vault records that wallet's pre-existing balance and requires the
+  same baseline after sale, redemption, or no-fill restoration.
 - Settlement is blocked until the pledged outcome balance has been sold, redeemed,
   or otherwise reduced to zero.
 - Unrelated ERC-20 tokens can be recovered only by the trader and only after the
@@ -58,7 +65,7 @@ The vault accounts for these buckets separately:
 - accrued protocol fees
 - protocol reserves
 - queued LP shares
-- gross bad debt
+- gross bad debt, reserve losses, and uncovered bad debt
 
 Trader equity, accrued protocol fees, and protocol reserves are excluded from LP totalAssets.
 Outstanding principal remains an LP receivable until settlement. Direct pUSD
@@ -69,13 +76,16 @@ make rounding deterministic.
 
 ## Loan State Machine
 
-1. RESERVED: trader equity is held and LP principal is reserved.
+1. RESERVED: trader equity is held and LP principal is reserved. The trader
+   commits the execution wallet before the adapter can fund the loan.
 2. EXECUTING: equity and principal move to a new isolated account.
 3. ACTIVE: required outcome shares are proven in that account. Unused pUSD is
    returned, so only the actual borrowed amount remains outstanding.
-4. SETTLED: outcome shares are gone, recovered pUSD repays principal and
-   interest, and remaining value returns to the trader.
-5. FAILED or CANCELLED: reservations and equity are released. A funded no-fill
+4. CLOSING: pledged shares are released only to the committed execution wallet.
+   A no-fill must return every share before the loan can become ACTIVE again.
+5. SETTLED: outcome shares are gone, recovered pUSD repays principal and the
+   user-signed fixed financing fee before remaining value returns to the trader.
+6. FAILED or CANCELLED: reservations and equity are released. A funded no-fill
    can fail only if all funded pUSD is recovered and no outcome shares remain.
 
 No loan becomes ACTIVE from an API record alone.
@@ -89,7 +99,7 @@ No loan becomes ACTIVE from an API record alone.
 - Queue value is calculated when processed, so losses and yield are shared fairly.
 - At settlement, protocol reserves cover principal shortfall before residual loss
   reduces LP share value.
-- Interest is split between LP yield and accrued protocol fees. Governance must
+- Fixed financing fees are split between LP yield and accrued protocol fees. Governance must
   explicitly allocate protocol fees into the bad-debt reserve.
 
 ## Operational Requirements
