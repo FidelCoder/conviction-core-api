@@ -6,7 +6,11 @@ import { AppError } from "../lib/errors.js";
 import { sendSuccess } from "../lib/responses.js";
 import { PolymarketProvider } from "../providers/polymarket/index.js";
 import { syncMarketsFromProvider } from "../services/markets.js";
-import { reconcilePendingPolymarketExecutions } from "../services/polymarket-execution-orchestrator.js";
+import {
+  getPolymarketLifecycleHealth,
+  monitorPolymarketPositionLifecycles,
+  reconcilePendingPolymarketExecutions,
+} from "../services/polymarket-execution-orchestrator.js";
 
 type MarketSyncQuery = {
   limit?: string;
@@ -70,6 +74,39 @@ export async function registerOperationsRoutes(app: FastifyInstance) {
       return handleExecutionReconciliation(request.headers.authorization, request.query, reply);
     },
   );
+
+  app.post<{ Querystring: ExecutionReconcileQuery }>(
+    "/ops/executions/polymarket/lifecycle",
+    reconciliationOptions,
+    async (request, reply) => {
+      return handleLifecycleMonitoring(request.headers.authorization, request.query, reply);
+    },
+  );
+
+  app.get<{ Querystring: ExecutionReconcileQuery }>(
+    "/ops/executions/polymarket/lifecycle",
+    reconciliationOptions,
+    async (request, reply) => {
+      return handleLifecycleMonitoring(request.headers.authorization, request.query, reply);
+    },
+  );
+
+  app.get("/ops/executions/polymarket/lifecycle/health", async (request, reply) => {
+    assertAuthorized(request.headers.authorization);
+    return sendSuccess(reply, { health: await getPolymarketLifecycleHealth() });
+  });
+}
+
+async function handleLifecycleMonitoring(
+  authorization: string | undefined,
+  query: ExecutionReconcileQuery,
+  reply: Parameters<typeof sendSuccess>[0],
+) {
+  assertAuthorized(authorization);
+  const limit = parseLimit(query.limit) ?? 10;
+  const monitoring = await monitorPolymarketPositionLifecycles(limit);
+  const reconciliation = await reconcilePendingPolymarketExecutions(limit);
+  return sendSuccess(reply, { monitoring, reconciliation });
 }
 
 async function handleExecutionReconciliation(

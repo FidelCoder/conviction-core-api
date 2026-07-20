@@ -83,6 +83,7 @@ enum PositionSide {
 enum PositionStatus {
   PENDING_EXECUTION
   EXECUTED
+  CLOSED
   FAILED
   CANCELLED
 }
@@ -110,6 +111,8 @@ enum PolymarketMarginExecutionState {
   AUTHORIZED
   RESERVED
   WALLET_DEPLOYING
+  WALLET_COMMIT_REQUIRED
+  WALLET_COMMITTED
   FUNDED
   ORDER_PREPARED
   ORDER_SUBMITTED
@@ -121,6 +124,31 @@ enum PolymarketMarginExecutionState {
   CANCELLED
   FAILED
   RECONCILIATION_REQUIRED
+}
+
+enum PolymarketCloseReason {
+  VOLUNTARY
+  MANDATORY
+  LIQUIDATION
+  RESOLUTION
+}
+
+enum PolymarketCloseStage {
+  AUTHORIZED
+  SHARES_RELEASING
+  SHARES_RELEASED
+  ORDER_PREPARED
+  ORDER_SUBMITTED
+  FILL_CONFIRMED
+  PROCEEDS_RETURNING
+  SETTLING
+  NO_FILL_RETURNING
+  NO_FILL_RESTORING
+  RESTORED
+  AUCTION_REQUIRED
+  RESOLUTION_REDEEMING
+  CLOSED
+  FAILED
 }
 
 enum MarginMarketPolicyStatus {
@@ -532,15 +560,60 @@ model PolymarketMarginExecution {
   openedAt                  DateTime?
   closingAt                 DateTime?
   closedAt                  DateTime?
+  activeCloseAttemptId      String?                        @db.ObjectId
   lastReconciledAt          DateTime?
   createdAt                 DateTime                       @default(now())
   updatedAt                 DateTime                       @updatedAt
   position                  Position                       @relation(fields: [positionId], references: [id], onDelete: NoAction)
+  closeAttempts             PolymarketCloseAttempt[]
 
   @@index([state])
   @@index([authorizationSigner])
   @@index([depositWalletAddress])
   @@index([lastReconciledAt])
+}
+
+model PolymarketCloseAttempt {
+  id                     String                    @id @default(auto()) @map("_id") @db.ObjectId
+  executionId            String                    @db.ObjectId
+  idempotencyKey         String                    @unique
+  authorizationNonce     String                    @unique
+  authorizationDeadline  DateTime
+  authorizationSigner    String
+  authorizationSignature String
+  reason                 PolymarketCloseReason
+  stage                  PolymarketCloseStage      @default(AUTHORIZED)
+  maxSlippageBps         Int
+  priceLimit             String
+  minimumProceeds        String
+  walletBaselineAssets   String?
+  walletBaselineShares   String?
+  signedOrderPayload     Json?
+  clobOrderId            String?                   @unique
+  clobTradeIds           Json?
+  settlementTxHashes     Json?
+  actualFillPrice        String?
+  actualShares           String?
+  actualProceeds         String?
+  actualFeeAssets        String?
+  vaultBeginTxHash       String?
+  returnTxHash           String?
+  vaultSettlementTxHash  String?
+  relayerTransactionId   String?
+  relayerOperation       String?
+  failureCode            String?
+  failureMessage         String?
+  requestPayload         Json?
+  responsePayload        Json?
+  completedAt            DateTime?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  execution              PolymarketMarginExecution @relation(fields: [executionId], references: [id], onDelete: NoAction)
+
+  @@index([executionId])
+  @@index([reason])
+  @@index([stage])
+  @@index([createdAt])
 }
 
 model TradeSignal {

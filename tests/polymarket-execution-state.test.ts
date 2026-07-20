@@ -11,11 +11,22 @@ import {
   isTerminalPolymarketExecutionState,
   parseSixDecimalAssets,
   persistedOrderRecoveryState,
+  quoteFokSellFromBids,
   summarizeClobTrades,
 } from "../src/services/polymarket-execution-state.js";
 
 test("permits only explicit execution lifecycle transitions", () => {
   assert.equal(canTransitionPolymarketExecution("AUTHORIZED", "RESERVED"), true);
+  assert.equal(
+    canTransitionPolymarketExecution("WALLET_DEPLOYING", "WALLET_COMMIT_REQUIRED"),
+    true,
+  );
+  assert.equal(
+    canTransitionPolymarketExecution("WALLET_COMMIT_REQUIRED", "WALLET_COMMITTED"),
+    true,
+  );
+  assert.equal(canTransitionPolymarketExecution("WALLET_COMMITTED", "FUNDED"), true);
+  assert.equal(canTransitionPolymarketExecution("WALLET_COMMIT_REQUIRED", "FUNDED"), false);
   assert.equal(canTransitionPolymarketExecution("ORDER_PREPARED", "ORDER_SUBMITTED"), true);
   assert.equal(canTransitionPolymarketExecution("ORDER_PREPARED", "OPEN"), false);
   assert.equal(canTransitionPolymarketExecution("CLOSED", "OPEN"), false);
@@ -46,6 +57,44 @@ test("rounds the FOK worst price upward to the market tick", () => {
 test("rounds the FOK closing floor downward to the market tick", () => {
   assert.equal(calculateFokSellPriceLimit("0.501", 100, "0.01"), "0.49");
   assert.equal(calculateFokSellPriceLimit("0.004", 2_000, "0.01"), "0.01");
+});
+
+test("quotes a full-depth FOK close with conservative venue fees", () => {
+  assert.deepEqual(
+    quoteFokSellFromBids({
+      amountShares: "100",
+      bids: [
+        { price: "0.6", size: "40" },
+        { price: "0.55", size: "60" },
+      ],
+      builderFeeBps: 100,
+      feeRateBps: 700,
+      maxSlippageBps: 100,
+      tickSize: "0.01",
+    }),
+    {
+      depthFloorPrice: "0.55",
+      estimatedGrossProceeds: "57",
+      maximumVenueFeeAssets: "2.29",
+      minimumProceeds: "51.71",
+      priceLimit: "0.54",
+    },
+  );
+});
+
+test("rejects a close when live bids cannot fill every pledged share", () => {
+  assert.throws(
+    () =>
+      quoteFokSellFromBids({
+        amountShares: "100",
+        bids: [{ price: "0.5", size: "99" }],
+        builderFeeBps: 0,
+        feeRateBps: 0,
+        maxSlippageBps: 100,
+        tickSize: "0.01",
+      }),
+    /cannot close the full position/,
+  );
 });
 
 test("aggregates unique CLOB trades into exact fill evidence", () => {

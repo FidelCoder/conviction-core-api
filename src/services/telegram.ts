@@ -714,7 +714,11 @@ async function buildMarketDigest() {
   ].join("\n\n");
 }
 
-async function sendTelegramMessage(chatId: string, text: string, replyMarkup?: TelegramReplyMarkup) {
+async function sendTelegramMessage(
+  chatId: string,
+  text: string,
+  replyMarkup?: TelegramReplyMarkup,
+) {
   if (!env.telegramBotToken) return false;
 
   try {
@@ -737,7 +741,6 @@ async function sendTelegramMessage(chatId: string, text: string, replyMarkup?: T
     return false;
   }
 }
-
 
 type TelegramReplyMarkup = {
   inline_keyboard: Array<Array<{ text: string; url?: string; web_app?: { url: string } }>>;
@@ -845,6 +848,7 @@ async function executionStatusMessage() {
     "Status: " + readiness.status,
     "Wallet flow: " + (readiness.canPrepareWalletTransactions ? "ready" : "blocked"),
     "Adapter settlement: " + (readiness.canSettleAdapterExecution ? "ready" : "blocked"),
+    "Canary venue fills: " + (readiness.canaryVenueFillEnabled ? "ready" : "disabled"),
     "Production venue fills: " + (readiness.productionVenueFillEnabled ? "ready" : "disabled"),
     "Ready stages: " + readyStages + "/" + totalStages,
     "Adapter: " + readiness.adapter.code,
