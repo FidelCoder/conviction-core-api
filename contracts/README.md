@@ -2,7 +2,20 @@
 
 Foundry contracts for the Conviction Markets margin layer live inside the core API repo because the API owns execution state, validation, and adapter boundaries.
 
-## Current Scope
+## Contract Families
+
+There are now two separate contract families:
+
+- ConvictionVault is the existing Sepolia collateral and intent scaffold. It is
+  test-only and does not lend LP funds into Polymarket.
+- PolygonPusdLiquidityVault is the production-oriented Polygon pUSD LP and
+  custody foundation. It remains disabled until adapters, reconciliation,
+  liquidation, monitoring, deployment, and audit gates are complete.
+
+The custody decision and accounting boundaries are recorded in
+docs/architecture/ADR-004-polygon-pusd-isolated-margin-custody.md.
+
+## Legacy Test Vault
 
 This is a contract foundation, not a live execution system.
 
@@ -23,15 +36,41 @@ This is a contract foundation, not a live execution system.
 
 The core API must continue to report `marginExecutionEnabled=false` until real contracts are deployed, funded, monitored, and wired to execution adapters.
 
+## Polygon pUSD Foundation
+
+- The LP vault exposes the ERC-4626 deposit, mint, withdraw, redeem, preview,
+  conversion, and limit surface.
+- Trader equity, LP assets, reservations, principal, accrued protocol fees,
+  protocol reserves, queued shares, and bad debt are separate accounting buckets.
+- Idle reserve, market exposure, and account exposure limit new reservations.
+- Each loan deploys a dedicated PolymarketIsolatedMarginAccount.
+- Only allowlisted venue contracts can be called by the loan's immutable adapter.
+- A loan cannot become active until its exact ERC-1155 outcome token is secured.
+- Failed no-fill execution must recover all funded pUSD before liquidity is
+  released.
+- Active shares cannot be released from custody.
+- Settlement applies protocol reserves before residual loss reaches LP shares.
+- Illiquid LP redemptions use a FIFO share queue and remain exposed to current
+  vault value until processed.
+
 ## Contract Layout
 
-The vault is split into three focused source files:
+The legacy vault is split into three focused source files:
 
 - `contracts/src/ConvictionVaultState.sol` owns enums, structs, storage, events, errors, and shared modifiers.
 - `contracts/src/ConvictionVaultAccounting.sol` owns collateral policy, deposits, withdrawals, account risk, transfer helpers, and guard checks.
 - `contracts/src/ConvictionVault.sol` keeps the deployable vault name and owns margin-intent lifecycle transitions.
 
 This keeps `ConvictionVault.sol` small while preserving the deployment import path used by scripts and tests.
+
+The Polygon foundation is kept separate:
+
+- contracts/src/PolygonPusdLiquidityVault.sol owns LP shares, loan reservations,
+  exposure, withdrawal queue, repayment accounting, and the reserve waterfall.
+- contracts/src/PolymarketIsolatedMarginAccount.sol holds one position's pUSD
+  and ERC-1155 shares.
+- contracts/test/PolygonPusdLiquidityVault.t.sol covers accounting, custody,
+  failure, donation, rounding, queue, cap, yield, and loss scenarios.
 
 ## Commands
 
@@ -53,9 +92,22 @@ forge script contracts/script/DeployConvictionVault.s.sol \
 
 Do not reuse development private keys in production. Before public funds, set a controlled liquidation recipient, call `transferOwnership(multisig)`, and have the multisig call `acceptOwnership()`.
 
+The Polygon vault deploy script is chain-locked to Polygon mainnet:
+
+    CONVICTION_POLYGON_VAULT_OWNER=0x...
+    POLYGON_PUSD_ADDRESS=0x...
+    forge script contracts/script/DeployPolygonPusdLiquidityVault.s.sol \
+      --rpc-url "$POLYGON_RPC_URL" \
+      --private-key "$DEPLOYER_PRIVATE_KEY" \
+      --broadcast
+
+Verify the current official pUSD address independently before deployment. After
+deployment, the owner must configure risk caps, adapters, and venue targets.
+Those actions are intentionally not hidden inside the deployment script.
+
 ## Next Contract Work
 
-- Implement real adapter contracts for prediction-market venues.
+- Implement and validate real CLOB adapter contracts for Polymarket.
 - Add oracle/mark-price based health updates before enabling live leverage.
 - Add oracle/price-source validation for collateral and market exposure.
 - Hand off accepted ownership to a multisig before public funds.
