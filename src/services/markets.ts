@@ -27,6 +27,7 @@ export type NormalizedMarket = {
   slug: string | null;
   conditionId: string | null;
   questionId: string | null;
+  negativeRisk: boolean | null;
   orderBookEnabled: boolean;
   acceptingOrders: boolean;
   orderPriceMinTickSize: string | null;
@@ -239,6 +240,7 @@ export function normalizeMarket(market: Market): NormalizedMarket {
     slug: market.slug,
     conditionId: market.conditionId,
     questionId: market.questionId,
+    negativeRisk: market.negativeRisk,
     orderBookEnabled: market.orderBookEnabled,
     acceptingOrders: market.acceptingOrders,
     orderPriceMinTickSize: market.orderPriceMinTickSize?.toString() ?? null,

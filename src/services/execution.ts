@@ -32,7 +32,7 @@ import { AppError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { getActiveContractConfig } from "./contracts.js";
 
-export const MAX_PENDING_MARGIN_LEVERAGE = 10;
+export const MAX_PENDING_MARGIN_LEVERAGE = 3;
 
 const TESTNET_ADAPTER_ID = "CONVICTION_TESTNET_VAULT_ADAPTER";
 const POLYMARKET_ADAPTER_ID = "POLYMARKET_CLOB_ADAPTER";

@@ -14,6 +14,7 @@ export type ProviderMarketInput = {
   slug?: string | null;
   conditionId?: string | null;
   questionId?: string | null;
+  negativeRisk?: boolean | null;
   orderBookEnabled?: boolean;
   acceptingOrders?: boolean;
   orderPriceMinTickSize?: string | number | null;

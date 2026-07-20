@@ -9,6 +9,7 @@ import { registerContractRoutes } from "./routes/contracts.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerMarketRoutes } from "./routes/markets.js";
+import { registerMarginRiskRoutes } from "./routes/margin-risk.js";
 import { registerOmnistonQuoteRoutes } from "./routes/omniston-quotes.js";
 import { registerOperationsRoutes } from "./routes/operations.js";
 import { registerPolymarketAccountRoutes } from "./routes/polymarket-accounts.js";
@@ -41,6 +42,7 @@ export async function buildApp() {
   await registerPolymarketAccountRoutes(app);
   await registerPreferenceRoutes(app);
   await registerMarketRoutes(app);
+  await registerMarginRiskRoutes(app);
   await registerOperationsRoutes(app);
   await registerOmnistonQuoteRoutes(app);
   await registerSignalRoutes(app);
