@@ -26,10 +26,15 @@ test("exposes safe stage instructions without returning execution credentials", 
     actualShares: null,
     actualSpentAssets: null,
     actualFeeAssets: null,
-    requestPayload: { borrowAssets: "1", financingFeeAssets: "0.01" },
+    requestPayload: {
+      borrowAssets: "1",
+      financingFeeAssets: "0.01",
+      sessionSignerPrivateKey: "must-not-leak",
+    },
     responsePayload: {
       stage: "execution_wallet_commit_required",
       walletCall: { chainId: 137, to: `0x${"2".repeat(40)}`, value: "0", data: "0x1234" },
+      clobCredentials: "must-not-leak",
     },
     failureCode: null,
     failureMessage: null,
@@ -60,4 +65,6 @@ test("exposes safe stage instructions without returning execution credentials", 
   });
   assert.equal("sessionSignerCiphertext" in normalized, false);
   assert.equal("clobCredentialsCiphertext" in normalized, false);
+  assert.equal("sessionSignerPrivateKey" in normalized.authorizedTerms, false);
+  assert.equal("clobCredentials" in (normalized.stageInstruction ?? {}), false);
 });
