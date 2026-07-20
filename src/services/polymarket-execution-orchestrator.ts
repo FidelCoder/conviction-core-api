@@ -57,7 +57,9 @@ import {
 
 const polygonChainId = 137;
 const transactionHashPattern = /^0x[a-fA-F0-9]{64}$/;
-const executionLockMs = 60_000;
+// Polygon receipt waits can outlive one serverless request. Keep the lease longer than any
+// bounded provider stage; expired leases are still recovered from onchain/CLOB state.
+const executionLockMs = 5 * 60_000;
 const terminalLoanStatus = { ACTIVE: 3, SETTLED: 4, FAILED: 5, CANCELLED: 6 } as const;
 
 const executionRequestSchema = z.object({

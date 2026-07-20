@@ -24,7 +24,7 @@ curl --fail --request POST \
   "$CORE_API_URL/ops/executions/polymarket/reconcile?limit=10"
 ```
 
-Run the job frequently enough that relayer and CLOB states are reconciled before authorization deadlines. The operation lock prevents concurrent workers from advancing the same record.
+Run the job frequently enough that relayer and CLOB states are reconciled before authorization deadlines. A five-minute operation lease prevents concurrent workers from entering a slow Polygon or relayer stage; after expiry, recovery checks source-system state before submitting another action.
 
 ## Canary
 
