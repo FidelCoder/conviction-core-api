@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { evaluatePolymarketReleaseCaps } from "../src/services/polymarket-release-policy.js";
+import {
+  evaluatePolymarketReleaseCaps,
+  selectEffectivePolymarketPositionCap,
+} from "../src/services/polymarket-release-policy.js";
 
 const unit = 1_000_000n;
 
@@ -75,4 +78,10 @@ test("blocks new borrowing when no LP assets exist", () => {
   assert.deepEqual(evaluatePolymarketReleaseCaps({ ...healthyInput(), totalAssets: 0n }), [
     "Vault has no LP assets available for margin.",
   ]);
+});
+
+test("reports the smaller canary cap until the canary is explicitly passed", () => {
+  assert.equal(selectEffectivePolymarketPositionCap(true, 5n * unit, 25n * unit), 5n * unit);
+  assert.equal(selectEffectivePolymarketPositionCap(false, 5n * unit, 25n * unit), 25n * unit);
+  assert.equal(selectEffectivePolymarketPositionCap(true, 50n * unit, 25n * unit), 25n * unit);
 });

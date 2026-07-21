@@ -1,4 +1,5 @@
 import { PolymarketAccountStatus, PolymarketCloseStage } from "@prisma/client";
+import { getContractConfig } from "@polymarket/clob-client-v2";
 import { createPublicClient, http, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
@@ -111,6 +112,14 @@ export function evaluatePolymarketReleaseCaps(input: ReleaseCapEvaluation) {
   return rejections;
 }
 
+export function selectEffectivePolymarketPositionCap(
+  canary: boolean,
+  canaryCap: bigint,
+  releaseCap: bigint,
+) {
+  return canary && canaryCap < releaseCap ? canaryCap : releaseCap;
+}
+
 export async function assertPolymarketReleasePolicy(input: ReleasePolicyInput) {
   const config = releasePolicyConfig();
   const canary = !env.polymarketCanaryPassed;
@@ -143,8 +152,11 @@ export async function assertPolymarketReleasePolicy(input: ReleasePolicyInput) {
     env.polymarketReleaseMaxPositionAssets,
     "POLYMARKET_RELEASE_MAX_POSITION_ASSETS",
   );
-  const maxPositionAssets =
-    canary && canaryPositionCap < releasePositionCap ? canaryPositionCap : releasePositionCap;
+  const maxPositionAssets = selectEffectivePolymarketPositionCap(
+    canary,
+    canaryPositionCap,
+    releasePositionCap,
+  );
   const rejections = evaluatePolymarketReleaseCaps({
     accountLinked: Boolean(linkedAccount),
     allowedMarket: !canary || config.conditionIds.includes(conditionId),
@@ -261,6 +273,14 @@ export async function getPolymarketReleasePolicyStatus(
     missing.push("Polygon vault reports uncovered bad debt.");
   if (dailyLossAssets !== null && dailyLossAssets >= dailyLossLimit)
     missing.push("POLYMARKET_RELEASE_DAILY_LOSS_LIMIT_ASSETS has been reached.");
+  const effectivePositionCap = selectEffectivePolymarketPositionCap(
+    canary,
+    parseSixDecimalAssets(env.polymarketCanaryMaxAssets, "POLYMARKET_CANARY_MAX_ASSETS"),
+    parseSixDecimalAssets(
+      env.polymarketReleaseMaxPositionAssets,
+      "POLYMARKET_RELEASE_MAX_POSITION_ASSETS",
+    ),
+  );
   const currentUtilizationBps =
     vault && vault.totalAssets > 0n
       ? Number(((vault.totalBorrowedAssets + vault.totalReservedAssets) * bps) / vault.totalAssets)
@@ -281,7 +301,7 @@ export async function getPolymarketReleasePolicyStatus(
     caps: {
       dailyLossLimitAssets: env.polymarketReleaseDailyLossLimitAssets,
       maxLeverageBps: env.polymarketReleaseMaxLeverageBps,
-      maxPositionAssets: env.polymarketReleaseMaxPositionAssets,
+      maxPositionAssets: formatSixDecimalAssets(effectivePositionCap),
       maxTvlAssets: env.polymarketReleaseMaxTvlAssets,
       maxUtilizationBps: env.polymarketReleaseMaxUtilizationBps,
     },
@@ -381,6 +401,26 @@ async function readVaultRiskSnapshot() {
 
 function releaseConfigurationRejections() {
   const rejections: string[] = [];
+  const official = getContractConfig(137);
+  for (const [name, configured, expected] of [
+    ["POLYMARKET_PUSD_ADDRESS", env.polymarketPusdAddress, official.collateral],
+    ["POLYMARKET_CTF_ADDRESS", env.polymarketCtfAddress, official.conditionalTokens],
+    ["POLYMARKET_EXCHANGE_V2_ADDRESS", env.polymarketExchangeV2Address, official.exchangeV2],
+    [
+      "POLYMARKET_NEG_RISK_EXCHANGE_V2_ADDRESS",
+      env.polymarketNegRiskExchangeV2Address,
+      official.negRiskExchangeV2,
+    ],
+    [
+      "POLYMARKET_NEG_RISK_ADAPTER_ADDRESS",
+      env.polymarketNegRiskAdapterAddress,
+      official.negRiskAdapter,
+    ],
+  ] as const) {
+    if (!configured) rejections.push(`${name} is missing.`);
+    else if (configured.toLowerCase() !== expected.toLowerCase())
+      rejections.push(`${name} does not match the current official CLOB V2 address.`);
+  }
   for (const [name, value] of [
     ["POLYMARKET_PUSD_VAULT_ADDRESS", env.polymarketPusdVaultAddress],
     ["POLYMARKET_PUSD_ADDRESS", env.polymarketPusdAddress],
