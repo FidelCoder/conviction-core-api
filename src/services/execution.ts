@@ -115,7 +115,9 @@ export async function getExecutionCapabilities() {
     activeRepaymentEnabled: executionReady && env.polymarketActiveRepayEnabled,
     marginIntentsEnabled: true,
     leverageRequiresContracts: true,
-    maxPendingMarginLeverage: MAX_PENDING_MARGIN_LEVERAGE,
+    maxPendingMarginLeverage: polymarketReadiness
+      ? Math.floor(polymarketReadiness.releasePolicy.caps.maxLeverageBps / 10_000)
+      : MAX_PENDING_MARGIN_LEVERAGE,
     activeAdapters,
     contractLayer: {
       status: polymarketReadiness

@@ -76,6 +76,27 @@ const envSchema = z.object({
     .string()
     .regex(/^\d+(?:\.\d{1,6})?$/)
     .default("5"),
+  POLYMARKET_CANARY_ALLOWED_WALLETS: z.string().trim().optional(),
+  POLYMARKET_CANARY_CONDITION_IDS: z.string().trim().optional(),
+  POLYMARKET_RELEASE_MAX_LEVERAGE_BPS: z.coerce
+    .number()
+    .int()
+    .min(10_001)
+    .max(30_000)
+    .default(20_000),
+  POLYMARKET_RELEASE_MAX_POSITION_ASSETS: z
+    .string()
+    .regex(/^\d+(?:\.\d{1,6})?$/)
+    .default("25"),
+  POLYMARKET_RELEASE_MAX_TVL_ASSETS: z
+    .string()
+    .regex(/^\d+(?:\.\d{1,6})?$/)
+    .default("1000"),
+  POLYMARKET_RELEASE_MAX_UTILIZATION_BPS: z.coerce.number().int().min(1).max(9_000).default(5_000),
+  POLYMARKET_RELEASE_DAILY_LOSS_LIMIT_ASSETS: z
+    .string()
+    .regex(/^\d+(?:\.\d{1,6})?$/)
+    .default("25"),
   POLYMARKET_DIRECT_LIQUIDATION_MAX_ASSETS: z
     .string()
     .regex(/^\d+(?:\.\d{1,6})?$/)
@@ -164,6 +185,13 @@ export const env = {
   polymarketActiveRepayEnabled: parsedEnv.data.POLYMARKET_ACTIVE_REPAY_ENABLED,
   polymarketCanaryPassed: parsedEnv.data.POLYMARKET_CANARY_PASSED,
   polymarketCanaryMaxAssets: parsedEnv.data.POLYMARKET_CANARY_MAX_ASSETS,
+  polymarketCanaryAllowedWallets: parsedEnv.data.POLYMARKET_CANARY_ALLOWED_WALLETS ?? null,
+  polymarketCanaryConditionIds: parsedEnv.data.POLYMARKET_CANARY_CONDITION_IDS ?? null,
+  polymarketReleaseMaxLeverageBps: parsedEnv.data.POLYMARKET_RELEASE_MAX_LEVERAGE_BPS,
+  polymarketReleaseMaxPositionAssets: parsedEnv.data.POLYMARKET_RELEASE_MAX_POSITION_ASSETS,
+  polymarketReleaseMaxTvlAssets: parsedEnv.data.POLYMARKET_RELEASE_MAX_TVL_ASSETS,
+  polymarketReleaseMaxUtilizationBps: parsedEnv.data.POLYMARKET_RELEASE_MAX_UTILIZATION_BPS,
+  polymarketReleaseDailyLossLimitAssets: parsedEnv.data.POLYMARKET_RELEASE_DAILY_LOSS_LIMIT_ASSETS,
   polymarketDirectLiquidationMaxAssets: parsedEnv.data.POLYMARKET_DIRECT_LIQUIDATION_MAX_ASSETS,
   polymarketMinReserveBps: parsedEnv.data.POLYMARKET_MIN_RESERVE_BPS,
   polymarketBuilderTakerFeeBps: parsedEnv.data.POLYMARKET_BUILDER_TAKER_FEE_BPS,
