@@ -66,6 +66,11 @@ export type NormalizedSocialAccount = {
   platformUserId: string;
   username: string | null;
   profileUrl: string | null;
+  authProvider: SocialAccount["authProvider"];
+  source: string | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  sessionCount: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -189,6 +194,95 @@ export async function createOrFetchSocialAccount(input: CreateOrFetchSocialAccou
   }
 
   return normalizeUserSession(user, socialAccount, user.traderProfile);
+}
+
+export async function attachVerifiedSocialAccountToUser(
+  userId: string,
+  input: CreateOrFetchSocialAccountInput,
+) {
+  const platformUserId = input.platformUserId.trim();
+
+  if (!platformUserId) {
+    throw new AppError("Platform user ID is required", {
+      code: "INVALID_PLATFORM_USER_ID",
+      statusCode: 422,
+    });
+  }
+
+  const [user, existingSocialAccount] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      include: { traderProfile: true },
+    }),
+    prisma.socialAccount.findUnique({
+      where: {
+        platform_platformUserId: {
+          platform: input.platform,
+          platformUserId,
+        },
+      },
+    }),
+  ]);
+
+  if (!user) {
+    throw new AppError("User not found", {
+      code: "USER_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  if (existingSocialAccount && existingSocialAccount.userId !== userId) {
+    throw new AppError("This wallet already belongs to another Conviction user", {
+      code: "SOCIAL_ACCOUNT_IDENTITY_CONFLICT",
+      statusCode: 409,
+    });
+  }
+
+  const now = new Date();
+  const socialAccountOperation = existingSocialAccount
+    ? prisma.socialAccount.update({
+        where: { id: existingSocialAccount.id },
+        data: {
+          username: normalizeNullableStringUpdate(input.username),
+          profileUrl: normalizeNullableStringUpdate(input.profileUrl),
+          authProvider: input.authProvider ?? existingSocialAccount.authProvider,
+          source: normalizeNullableStringUpdate(input.source),
+          metadata: toJsonValue(input.metadata),
+          firstSeenAt: existingSocialAccount.firstSeenAt ?? now,
+          lastSeenAt: now,
+          sessionCount: { increment: 1 },
+        },
+      })
+    : prisma.socialAccount.create({
+        data: {
+          userId,
+          platform: input.platform,
+          platformUserId,
+          username: normalizeNullableString(input.username),
+          profileUrl: normalizeNullableString(input.profileUrl),
+          authProvider: input.authProvider ?? inferAuthProvider(input.platform, platformUserId),
+          source: normalizeNullableString(input.source),
+          metadata: toJsonValue(input.metadata),
+          firstSeenAt: now,
+          lastSeenAt: now,
+          sessionCount: 1,
+        },
+      });
+  const [socialAccount, updatedUser] = await prisma.$transaction([
+    socialAccountOperation,
+    prisma.user.update({
+      where: { id: userId },
+      data: {
+        firstSeenAt: user.firstSeenAt ?? now,
+        lastSeenAt: now,
+        sessionCount: { increment: 1 },
+        acquisitionSource: user.acquisitionSource ?? normalizeNullableString(input.source),
+      },
+      include: { traderProfile: true },
+    }),
+  ]);
+
+  return normalizeUserSession(updatedUser, socialAccount, updatedUser.traderProfile);
 }
 
 export async function upsertTraderProfile(input: UpsertTraderProfileInput) {
@@ -387,6 +481,11 @@ function normalizeSocialAccount(socialAccount: SocialAccount): NormalizedSocialA
     platformUserId: socialAccount.platformUserId,
     username: socialAccount.username,
     profileUrl: socialAccount.profileUrl,
+    authProvider: socialAccount.authProvider,
+    source: socialAccount.source,
+    firstSeenAt: socialAccount.firstSeenAt?.toISOString() ?? null,
+    lastSeenAt: socialAccount.lastSeenAt?.toISOString() ?? null,
+    sessionCount: socialAccount.sessionCount,
     createdAt: socialAccount.createdAt.toISOString(),
     updatedAt: socialAccount.updatedAt.toISOString(),
   };

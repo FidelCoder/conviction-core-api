@@ -1,11 +1,13 @@
 import { randomBytes } from "node:crypto";
 
 import {
+  AuthProvider,
   PolymarketAccountStatus,
   PolymarketChallengePurpose,
   PolymarketPositionState,
   PolymarketWalletType,
   Prisma,
+  SocialPlatform,
 } from "@prisma/client";
 import {
   createPublicClient,
@@ -22,8 +24,12 @@ import { z } from "zod";
 import { env } from "../config/index.js";
 import { encryptJson } from "../lib/credentials.js";
 import { AppError } from "../lib/errors.js";
-import { buildPolymarketAccountMessage } from "../lib/polymarket-link-message.js";
+import {
+  buildPolymarketAccountMessage,
+  buildPolymarketAuthMessage,
+} from "../lib/polymarket-link-message.js";
 import { prisma } from "../lib/prisma.js";
+import { attachVerifiedSocialAccountToUser, createOrFetchSocialAccount } from "./users.js";
 
 const challengeLifetimeMs = 10 * 60 * 1000;
 const polygonChainId = 137;
@@ -89,6 +95,37 @@ export type CompleteUnlinkInput = {
   convictionSignature: string;
   polymarketSignature?: string | null;
 };
+
+export type CreatePolymarketAuthChallengeInput = {
+  ownerAddress: string;
+};
+
+export type CompletePolymarketAuthInput = {
+  challengeId: string;
+  signature: string;
+};
+
+export function resolvePolymarketAuthUserId(linkedUserIds: string[], socialUserId: string | null) {
+  const uniqueLinkedUserIds = [...new Set(linkedUserIds)];
+
+  if (uniqueLinkedUserIds.length > 1) {
+    throw new AppError("This Polymarket owner is linked to multiple Conviction users", {
+      code: "POLYMARKET_AUTH_IDENTITY_CONFLICT",
+      statusCode: 409,
+    });
+  }
+
+  const linkedUserId = uniqueLinkedUserIds[0] ?? null;
+
+  if (linkedUserId && socialUserId && linkedUserId !== socialUserId) {
+    throw new AppError("Polymarket and Conviction wallet identities do not match", {
+      code: "POLYMARKET_AUTH_IDENTITY_CONFLICT",
+      statusCode: 409,
+    });
+  }
+
+  return linkedUserId ?? socialUserId;
+}
 
 export async function createPolymarketLinkChallenge(input: CreateLinkChallengeInput) {
   const convictionAddress = normalizeAddress(input.convictionAddress, "Conviction wallet");
@@ -191,6 +228,233 @@ export async function completePolymarketAccountLink(input: CompleteLinkInput) {
 
     return getPolymarketAccount(input.userId, account.id);
   }
+}
+
+export async function createPolymarketAuthChallenge(input: CreatePolymarketAuthChallengeInput) {
+  const ownerAddress = normalizeAddress(input.ownerAddress, "Polymarket owner");
+  const activeAccounts = await prisma.polymarketAccount.findMany({
+    where: {
+      ownerAddress,
+      status: { not: PolymarketAccountStatus.DISCONNECTED },
+    },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  const linkedAccount = activeAccounts[0] ?? null;
+  const existingSocialAccount = await prisma.socialAccount.findUnique({
+    where: {
+      platform_platformUserId: {
+        platform: SocialPlatform.WEB,
+        platformUserId: ownerAddress,
+      },
+    },
+  });
+
+  const resolvedUserId = resolvePolymarketAuthUserId(
+    activeAccounts.map((account) => account.userId),
+    existingSocialAccount?.userId ?? null,
+  );
+
+  if (!linkedAccount) {
+    const disconnectedAccount = await prisma.polymarketAccount.findFirst({
+      where: { ownerAddress, status: PolymarketAccountStatus.DISCONNECTED },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    if (disconnectedAccount) {
+      throw new AppError(
+        "This Polymarket connection was disconnected. Sign in another way and re-link it first",
+        {
+          code: "POLYMARKET_AUTH_DISCONNECTED",
+          statusCode: 403,
+        },
+      );
+    }
+  }
+
+  const issuedAt = new Date();
+  const expiresAt = new Date(issuedAt.getTime() + challengeLifetimeMs);
+  const nonce = randomBytes(32).toString("hex");
+  const funderAddress = linkedAccount?.funderAddress ?? ownerAddress;
+  const walletType = linkedAccount?.walletType ?? PolymarketWalletType.EOA;
+  const message = buildPolymarketAuthMessage({
+    ownerAddress,
+    funderAddress,
+    walletType,
+    nonce,
+    issuedAt,
+    expiresAt,
+  });
+
+  await prisma.polymarketLinkChallenge.deleteMany({
+    where: {
+      purpose: PolymarketChallengePurpose.AUTH,
+      polymarketOwnerAddress: ownerAddress,
+      expiresAt: { lte: issuedAt },
+    },
+  });
+
+  const challenge = await prisma.polymarketLinkChallenge.create({
+    data: {
+      userId: resolvedUserId,
+      accountId: linkedAccount?.id ?? null,
+      purpose: PolymarketChallengePurpose.AUTH,
+      convictionAddress: ownerAddress,
+      convictionChainId: polygonChainId,
+      polymarketOwnerAddress: ownerAddress,
+      polymarketFunderAddress: funderAddress,
+      polymarketWalletType: walletType,
+      nonce,
+      message,
+      expiresAt,
+    },
+  });
+
+  return {
+    id: challenge.id,
+    message: challenge.message,
+    ownerAddress,
+    funderAddress,
+    walletType,
+    expiresAt: challenge.expiresAt.toISOString(),
+  };
+}
+
+export async function completePolymarketAuth(input: CompletePolymarketAuthInput) {
+  const challenge = await prisma.polymarketLinkChallenge.findFirst({
+    where: {
+      id: input.challengeId,
+      purpose: PolymarketChallengePurpose.AUTH,
+    },
+  });
+
+  if (!challenge) {
+    throw new AppError("Polymarket authentication challenge not found", {
+      code: "POLYMARKET_AUTH_CHALLENGE_NOT_FOUND",
+      statusCode: 404,
+    });
+  }
+
+  assertPolymarketChallengeState(challenge);
+  const signatureValid = await verifyOwnershipSignature({
+    address: challenge.polymarketOwnerAddress,
+    chainId: polygonChainId,
+    message: challenge.message,
+    signature: input.signature,
+  });
+
+  if (!signatureValid) {
+    throw new AppError("Polymarket owner signature is invalid", {
+      code: "INVALID_POLYMARKET_AUTH_SIGNATURE",
+      statusCode: 401,
+    });
+  }
+
+  const account = challenge.accountId
+    ? await prisma.polymarketAccount.findFirst({
+        where: {
+          id: challenge.accountId,
+          ownerAddress: challenge.polymarketOwnerAddress,
+          funderAddress: challenge.polymarketFunderAddress,
+          status: { not: PolymarketAccountStatus.DISCONNECTED },
+        },
+        include: { positions: { orderBy: { updatedAt: "desc" } } },
+      })
+    : null;
+
+  if (challenge.accountId && !account) {
+    throw new AppError("The linked Polymarket account changed during authentication", {
+      code: "POLYMARKET_AUTH_ACCOUNT_CHANGED",
+      statusCode: 409,
+    });
+  }
+
+  let authenticatedAccount = account;
+
+  if (!authenticatedAccount) {
+    const candidateAccount = await prisma.polymarketAccount.findUnique({
+      where: { funderAddress: challenge.polymarketFunderAddress },
+      include: { positions: { orderBy: { updatedAt: "desc" } } },
+    });
+
+    if (candidateAccount?.status === PolymarketAccountStatus.DISCONNECTED) {
+      throw new AppError("This Polymarket connection must be re-linked before sign-in", {
+        code: "POLYMARKET_AUTH_DISCONNECTED",
+        statusCode: 403,
+      });
+    }
+
+    if (
+      candidateAccount &&
+      (candidateAccount.ownerAddress !== challenge.polymarketOwnerAddress ||
+        (challenge.userId && candidateAccount.userId !== challenge.userId))
+    ) {
+      throw new AppError("This Polymarket account belongs to another Conviction user", {
+        code: "POLYMARKET_AUTH_IDENTITY_CONFLICT",
+        statusCode: 409,
+      });
+    }
+
+    authenticatedAccount = candidateAccount;
+  }
+
+  if (
+    authenticatedAccount &&
+    challenge.userId &&
+    authenticatedAccount.userId !== challenge.userId
+  ) {
+    throw new AppError("Polymarket and Conviction wallet identities do not match", {
+      code: "POLYMARKET_AUTH_IDENTITY_CONFLICT",
+      statusCode: 409,
+    });
+  }
+
+  const consumed = await prisma.polymarketLinkChallenge.updateMany({
+    where: { id: challenge.id, consumedAt: null },
+    data: { consumedAt: new Date() },
+  });
+
+  if (consumed.count !== 1) throw challengeUsedError();
+
+  const sessionInput = {
+    platform: SocialPlatform.WEB,
+    platformUserId: challenge.polymarketOwnerAddress,
+    username: shortWalletLabel(challenge.polymarketOwnerAddress),
+    displayName: "Polymarket " + shortWalletLabel(challenge.polymarketOwnerAddress),
+    profileUrl: null,
+    authProvider: AuthProvider.POLYMARKET_WALLET,
+    source: "POLYMARKET_SIGN_IN",
+    metadata: {
+      funderAddress: challenge.polymarketFunderAddress,
+      walletType: challenge.polymarketWalletType,
+    },
+  };
+  const session = authenticatedAccount
+    ? await attachVerifiedSocialAccountToUser(authenticatedAccount.userId, sessionInput)
+    : challenge.userId
+      ? await attachVerifiedSocialAccountToUser(challenge.userId, sessionInput)
+      : await createOrFetchSocialAccount(sessionInput);
+
+  if (!authenticatedAccount) {
+    authenticatedAccount = await prisma.polymarketAccount.create({
+      data: {
+        userId: session.user.id,
+        ownerAddress: challenge.polymarketOwnerAddress,
+        funderAddress: challenge.polymarketFunderAddress,
+        walletType: PolymarketWalletType.EOA,
+        chainId: polygonChainId,
+        status: PolymarketAccountStatus.LINKED,
+        linkedAt: new Date(),
+        walletVerifiedAt: new Date(),
+      },
+      include: { positions: true },
+    });
+  }
+
+  return {
+    session,
+    account: normalizePolymarketAccount(authenticatedAccount),
+  };
 }
 
 export async function listPolymarketAccounts(userId: string) {
@@ -722,6 +986,10 @@ function normalizeAddress(value: string, label: string) {
   }
 
   return getAddress(trimmed).toLowerCase();
+}
+
+function shortWalletLabel(address: string) {
+  return address.slice(0, 6) + "..." + address.slice(-4);
 }
 
 function normalizeSignature(value: string) {
