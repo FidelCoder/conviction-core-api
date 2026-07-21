@@ -27,6 +27,7 @@ import {
   formatSixDecimalAssets,
   parseSixDecimalAssets,
 } from "./polymarket-execution-state.js";
+import { assertPolymarketReleasePolicy } from "./polymarket-release-policy.js";
 
 const polygonChainId = 137;
 const bytes32Pattern = /^0x[a-fA-F0-9]{64}$/;
@@ -97,6 +98,14 @@ export async function preparePolymarketMarginExecution(
       details: { rejections: decision.rejections },
     });
   }
+  await assertPolymarketReleasePolicy({
+    borrowAssets: decision.quote.borrowAssets,
+    conditionId: context.market.conditionId!,
+    leverageBps: context.leverageBps,
+    notionalAssets: decision.quote.notionalAssets,
+    userId: input.userId,
+    walletAddress: context.position.walletAddress!,
+  });
 
   const priceLimit = calculateFokBuyPriceLimit(
     decision.quote.openingPrice,
@@ -170,6 +179,14 @@ export async function authorizePolymarketMarginExecution(
       details: { rejections: freshDecision.rejections },
     });
   }
+  await assertPolymarketReleasePolicy({
+    borrowAssets: freshDecision.quote.borrowAssets,
+    conditionId: context.market.conditionId!,
+    leverageBps: context.leverageBps,
+    notionalAssets: freshDecision.quote.notionalAssets,
+    userId: input.userId,
+    walletAddress: context.position.walletAddress!,
+  });
   assertFreshQuoteInsideAuthorization(context.tickSize, input, freshDecision.quote);
   const reservationCalls = buildReservationWalletCalls(context, input, input);
   const approvalCall = reservationCalls.find((call) => call.id === "approve-pusd");

@@ -51,6 +51,10 @@ import { getPolymarketRiskSnapshot } from "../providers/polymarket/orderbook.js"
 import { createMarginRiskQuote } from "./margin-risk-quotes.js";
 import { normalizePolymarketMarginExecution } from "./polymarket-margin-execution.js";
 import {
+  getPolymarketReleasePolicyStatus,
+  type PolymarketVaultReleaseSnapshot,
+} from "./polymarket-release-policy.js";
+import {
   calculateFokBuyPriceLimit,
   calculatePolymarketPositionHealth,
   classifyFokPostResult,
@@ -131,7 +135,9 @@ const vaultAbi = parseAbi([
   "function riskManager() view returns (address)",
   "function paused() view returns (bool)",
   "function protocolReserves() view returns (uint256)",
+  "function totalAssets() view returns (uint256)",
   "function totalBorrowedAssets() view returns (uint256)",
+  "function totalReservedAssets() view returns (uint256)",
   "function totalUncoveredBadDebt() view returns (uint256)",
   "function isExecutionTargetAllowed(address) view returns (bool)",
   "function fundLoan(bytes32 loanId)",
@@ -1155,6 +1161,14 @@ async function advanceExecutionRecord(initial: ExecutionWithPosition) {
 export async function getPolymarketExecutionReadiness() {
   const missing: string[] = [];
   const warnings: string[] = [];
+  let releaseVaultSnapshot: PolymarketVaultReleaseSnapshot | null = null;
+  let polygonReady = false;
+  let pusdReady = false;
+  let contractsReady = false;
+  let signerReady = false;
+  let clobReady = false;
+  let custodyReady = false;
+  let pauseReady = false;
   const official = getContractConfig(polygonChainId);
   const expectedAddresses = {
     POLYMARKET_PUSD_ADDRESS: official.collateral,
@@ -1183,6 +1197,7 @@ export async function getPolymarketExecutionReadiness() {
     ["POLYMARKET_EXECUTION_ADAPTER_ADDRESS", env.polymarketExecutionAdapterAddress],
     ["POLYMARKET_EXECUTION_SIGNER_PRIVATE_KEY", env.polymarketExecutionSignerPrivateKey],
     ["POLYMARKET_EXECUTION_KEY_ENCRYPTION_KEY", env.polymarketExecutionKeyEncryptionKey],
+    ["POLYMARKET_CREDENTIALS_ENCRYPTION_KEY", env.polymarketCredentialsEncryptionKey],
     ["POLYMARKET_DEPOSIT_WALLET_FACTORY_ADDRESS", env.polymarketDepositWalletFactoryAddress],
     ["POLYMARKET_BUILDER_CODE", env.polymarketBuilderCode],
     ["POLYMARKET_GOVERNANCE_ADDRESS", env.polymarketGovernanceAddress],
@@ -1205,6 +1220,9 @@ export async function getPolymarketExecutionReadiness() {
   if (!env.polymarketLifecycleEnabled) {
     missing.push("POLYMARKET_LIFECYCLE_ENABLED is false.");
   }
+  if (!env.polymarketActiveRepayEnabled) {
+    missing.push("POLYMARKET_ACTIVE_REPAY_ENABLED is false.");
+  }
   const [major, minor] = process.versions.node.split(".").map(Number);
   if ((major ?? 0) < 20 || ((major ?? 0) === 20 && (minor ?? 0) < 10)) {
     missing.push("Node 20.10 or newer is required by the official CLOB V2 client.");
@@ -1223,6 +1241,8 @@ export async function getPolymarketExecutionReadiness() {
       }
       const [
         vaultCode,
+        pusdCode,
+        factoryCode,
         asset,
         chainId,
         adapterAllowed,
@@ -1232,10 +1252,14 @@ export async function getPolymarketExecutionReadiness() {
         riskManager,
         paused,
         reserves,
+        totalAssets,
         borrowed,
+        reserved,
         uncoveredBadDebt,
       ] = await Promise.all([
         publicClient.getCode({ address: vault }),
+        publicClient.getCode({ address: env.polymarketPusdAddress as Address }),
+        publicClient.getCode({ address: env.polymarketDepositWalletFactoryAddress as Address }),
         publicClient.readContract({ abi: vaultAbi, address: vault, functionName: "asset" }),
         publicClient.readContract({
           abi: vaultAbi,
@@ -1263,6 +1287,7 @@ export async function getPolymarketExecutionReadiness() {
           address: vault,
           functionName: "protocolReserves",
         }),
+        publicClient.readContract({ abi: vaultAbi, address: vault, functionName: "totalAssets" }),
         publicClient.readContract({
           abi: vaultAbi,
           address: vault,
@@ -1271,11 +1296,20 @@ export async function getPolymarketExecutionReadiness() {
         publicClient.readContract({
           abi: vaultAbi,
           address: vault,
+          functionName: "totalReservedAssets",
+        }),
+        publicClient.readContract({
+          abi: vaultAbi,
+          address: vault,
           functionName: "totalUncoveredBadDebt",
         }),
       ]);
+      polygonReady = true;
       if (!vaultCode || vaultCode === "0x")
         missing.push("Configured Polygon vault has no bytecode.");
+      if (!pusdCode || pusdCode === "0x") missing.push("Configured pUSD contract has no bytecode.");
+      if (!factoryCode || factoryCode === "0x")
+        missing.push("Configured deposit-wallet factory has no bytecode.");
       if (asset.toLowerCase() !== env.polymarketPusdAddress!.toLowerCase()) {
         missing.push("Polygon vault asset is not the configured pUSD contract.");
       }
@@ -1301,6 +1335,29 @@ export async function getPolymarketExecutionReadiness() {
       ]);
       if (roleAddresses.size !== 4) missing.push("Vault governance roles are not separated.");
       if (paused) missing.push("Polygon vault is paused for new risk.");
+      pusdReady =
+        Boolean(pusdCode && pusdCode !== "0x") &&
+        asset.toLowerCase() === env.polymarketPusdAddress!.toLowerCase() &&
+        pusdAllowed;
+      signerReady =
+        adapterAccount.address.toLowerCase() ===
+        env.polymarketExecutionAdapterAddress!.toLowerCase();
+      contractsReady =
+        Boolean(vaultCode && vaultCode !== "0x") &&
+        adapterAllowed &&
+        chainId === 137n &&
+        roleAddresses.size === 4;
+      custodyReady =
+        Boolean(factoryCode && factoryCode !== "0x") &&
+        Boolean(env.polymarketExecutionKeyEncryptionKey);
+      pauseReady = !paused;
+      releaseVaultSnapshot = {
+        paused,
+        totalAssets,
+        totalBorrowedAssets: borrowed,
+        totalReservedAssets: reserved,
+        uncoveredBadDebt,
+      };
       if (borrowed > 0n && (reserves * 10_000n) / borrowed < BigInt(env.polymarketMinReserveBps)) {
         missing.push("Protocol reserve coverage is below POLYMARKET_MIN_RESERVE_BPS.");
       }
@@ -1329,31 +1386,149 @@ export async function getPolymarketExecutionReadiness() {
       if (!clobVersion.ok || versionPayload.version !== 2) {
         missing.push("Polymarket CLOB is not reporting V2.");
       }
+      clobReady = clobOk.ok && clobVersion.ok && versionPayload.version === 2;
     } catch (error) {
       missing.push(`Polygon/CLOB readiness probe failed: ${providerError(error)}`);
     }
   }
-  if (missing.length === 0 && !env.polymarketCanaryPassed) {
+  const releasePolicy = await getPolymarketReleasePolicyStatus({
+    vaultSnapshot: releaseVaultSnapshot,
+  });
+  if (missing.length === 0 && releasePolicy.missing.length === 0 && !env.polymarketCanaryPassed) {
     warnings.push(
       "A small real-money open-secure-close-repay canary is still required before caps are raised.",
     );
   }
 
   const infrastructureReady = missing.length === 0;
-  const productionReady = infrastructureReady && env.polymarketCanaryPassed;
+  missing.push(...releasePolicy.missing);
+  const releasePolicyReady = releasePolicy.missing.length === 0;
+  const productionReady = infrastructureReady && releasePolicyReady && env.polymarketCanaryPassed;
+  const venueFillEnabled = infrastructureReady && releasePolicyReady;
+  const hasRelayerCredentials = Boolean(
+    (env.polymarketRelayerApiKey && env.polymarketRelayerApiKeyAddress) ||
+      (env.polymarketBuilderApiKey &&
+        env.polymarketBuilderApiSecret &&
+        env.polymarketBuilderApiPassphrase),
+  );
+  const gates = [
+    readinessGate(
+      "account_link",
+      "Polymarket account link",
+      Boolean(env.polymarketCredentialsEncryptionKey) &&
+        (!releasePolicy.inviteOnly || releasePolicy.allowedWalletsCount > 0),
+      "Verified linked accounts are required for invited canary wallets.",
+    ),
+    readinessGate(
+      "polygon",
+      "Polygon network",
+      polygonReady,
+      "Polygon RPC and chain identity must be verifiable.",
+    ),
+    readinessGate(
+      "pusd",
+      "pUSD collateral",
+      pusdReady,
+      "The official pUSD contract must match the vault asset and allowlist.",
+    ),
+    readinessGate(
+      "contracts",
+      "Vault contracts",
+      contractsReady,
+      "Vault bytecode, adapter authorization, chain ID, and separated roles must verify.",
+    ),
+    readinessGate(
+      "credentials",
+      "Credential custody",
+      Boolean(env.polymarketCredentialsEncryptionKey && env.polymarketExecutionKeyEncryptionKey),
+      "CLOB and isolated-wallet credentials must be encrypted at rest.",
+    ),
+    readinessGate(
+      "signer",
+      "Execution signer",
+      signerReady,
+      "The configured signer must match the authorized vault adapter.",
+    ),
+    readinessGate(
+      "clob",
+      "Polymarket CLOB",
+      clobReady,
+      "CLOB health and V2 version probes must pass.",
+    ),
+    readinessGate(
+      "relayer",
+      "Polymarket relayer",
+      hasRelayerCredentials,
+      "Relayer or builder HMAC credentials must be configured.",
+    ),
+    readinessGate(
+      "risk_feed",
+      "Market risk feed",
+      clobReady && (releasePolicy.allowedMarketsCount > 0 || !releasePolicy.inviteOnly),
+      "Eligible markets need current order-book data, both tokens, and a risk policy.",
+    ),
+    readinessGate(
+      "custody",
+      "Isolated custody",
+      custodyReady,
+      "The deposit-wallet factory and encrypted session signer flow must be available.",
+    ),
+    readinessGate(
+      "reconciliation",
+      "Recovery and repayment",
+      env.polymarketLifecycleEnabled && env.polymarketActiveRepayEnabled,
+      "Lifecycle recovery and active principal repayment must both be enabled.",
+    ),
+    readinessGate(
+      "pause",
+      "Vault pause status",
+      pauseReady,
+      "New execution is blocked while the vault is paused.",
+    ),
+    readinessGate(
+      "invite",
+      "Canary invite allowlist",
+      !releasePolicy.inviteOnly || releasePolicy.allowedWalletsCount > 0,
+      "Invite-only canary requires at least one explicit wallet.",
+    ),
+    readinessGate(
+      "markets",
+      "Canary market allowlist",
+      !releasePolicy.inviteOnly ||
+        (releasePolicy.allowedMarketsCount >= 1 && releasePolicy.allowedMarketsCount <= 5),
+      "Canary must be limited to one through five explicit condition IDs.",
+    ),
+    readinessGate(
+      "caps",
+      "Release risk caps",
+      releasePolicyReady,
+      "Leverage, position, TVL, utilization, reserve, bad-debt, and daily-loss caps must be healthy.",
+    ),
+  ];
 
   return {
-    status: productionReady ? "READY" : infrastructureReady ? "READY_FOR_CANARY" : "BLOCKED",
-    venueFillEnabled: infrastructureReady,
-    canaryVenueFillEnabled: infrastructureReady && !env.polymarketCanaryPassed,
+    status:
+      productionReady && releasePolicyReady
+        ? "READY"
+        : venueFillEnabled
+          ? "READY_FOR_CANARY"
+          : "BLOCKED",
+    venueFillEnabled,
+    canaryVenueFillEnabled: venueFillEnabled && !env.polymarketCanaryPassed,
     productionVenueFillEnabled: productionReady,
     chainId: polygonChainId,
     custody: "ONE_POSITION_ONE_ISOLATED_ACCOUNT",
     orderType: "FOK",
     signatureType: "POLY_1271",
+    gates,
+    releasePolicy,
     missing,
     warnings,
   };
+}
+
+function readinessGate(id: string, label: string, ready: boolean, detail: string) {
+  return { id, label, ready, detail };
 }
 
 async function advanceOneStage(execution: ExecutionWithPosition) {
@@ -2740,28 +2915,12 @@ async function markNoFillFailed(
 }
 
 async function assertExecutionRuntimeReady(execution: ExecutionWithPosition) {
-  const readiness = await getPolymarketExecutionReadiness();
-  if (!readiness.venueFillEnabled) {
-    throw new Error(`Polymarket execution is blocked: ${readiness.missing.join(" ")}`);
-  }
   if (execution.position.chainId !== polygonChainId) throw new Error("Execution is not on Polygon");
   requiredEncryptionKey();
   requiredAddress(env.polymarketPusdAddress, "POLYMARKET_PUSD_ADDRESS");
   requiredAddress(env.polymarketCtfAddress, "POLYMARKET_CTF_ADDRESS");
   requiredAddress(env.polymarketExecutionAdapterAddress, "POLYMARKET_EXECUTION_ADAPTER_ADDRESS");
   if (!env.polymarketLifecycleEnabled) throw new Error("Polymarket lifecycle is disabled");
-  if (!env.polymarketCanaryPassed) {
-    const request = executionRequest(execution);
-    const requestedAssets =
-      parseSixDecimalAssets(request.collateralAssets, "collateralAssets") +
-      parseSixDecimalAssets(request.borrowAssets, "borrowAssets");
-    if (
-      requestedAssets >
-      parseSixDecimalAssets(env.polymarketCanaryMaxAssets, "POLYMARKET_CANARY_MAX_ASSETS")
-    ) {
-      throw new Error("Execution exceeds the pre-production canary cap");
-    }
-  }
   const signer = privateKeyToAccount(requiredPrivateKey());
   if (signer.address.toLowerCase() !== execution.adapterAddress.toLowerCase()) {
     throw new Error("Execution signer does not match the loan adapter");

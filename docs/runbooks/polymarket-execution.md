@@ -11,9 +11,16 @@
 6. Set `POLYMARKET_LIFECYCLE_ENABLED=true` and keep
    `POLYMARKET_CANARY_PASSED=false`. The canary cannot exceed
    `POLYMARKET_CANARY_MAX_ASSETS`.
-7. Confirm `GET /execution/polymarket/readiness` returns `READY_FOR_CANARY`.
-8. Keep normal production fills disabled until a complete canary passes. Only
-   then set `POLYMARKET_CANARY_PASSED=true` and require readiness `READY`.
+7. Add only approved wallets to `POLYMARKET_CANARY_ALLOWED_WALLETS`. Each invited user must have
+   a verified linked Polymarket account. Add one through five reviewed condition IDs to
+   `POLYMARKET_CANARY_CONDITION_IDS`; each market needs both outcome tokens and an active risk policy.
+8. Set the initial leverage, position, TVL, utilization, and daily realized-loss caps. The defaults
+   in `.env.example` are deliberately conservative and are enforced before reservation calldata is
+   returned.
+9. Confirm `GET /execution/polymarket/readiness` returns `READY_FOR_CANARY`, every structured gate
+   reports `ready: true`, and the reported cap values match the approved release sheet.
+10. Keep normal production fills disabled until a complete canary passes. Only
+    then set `POLYMARKET_CANARY_PASSED=true` and require readiness `READY`.
 
 ## Active Principal Repayment
 
@@ -76,6 +83,36 @@ Use a fresh market with adequate depth and a small pUSD amount.
    verify principal, fixed financing fee, protocol fee, LP yield, reserve loss,
    uncovered bad debt, and trader remainder directly onchain.
 9. Repeat for YES, NO, negative-risk, explicit no-fill, relayer delay, RPC timeout, and worker restart cases.
+
+Record one evidence row per run with the Conviction position/execution IDs, linked account ID,
+condition/token IDs, CLOB order and trade IDs, every Polygon transaction hash, actual fill/spend/fee,
+vault loan and custody addresses, close-attempt ID, repayment/settlement hashes, LP share change, and
+the final readiness snapshot. A readiness response is not a successful canary. Do not change
+`POLYMARKET_CANARY_PASSED` without this source-system evidence for both YES and NO plus a no-fill
+recovery.
+
+## Deployment and rollback order
+
+1. Deploy and verify the exact vault/factory artifacts, configure separated roles, authorize only the
+   adapter and official pUSD target, then fund the signer with the minimum required POL.
+2. Apply the database schema and deploy Core with execution disabled. Verify health, market sync,
+   account linking, protected reconciliation, and secret-free readiness output.
+3. Deploy the frontend against that Core release. Existing market, Pulse, profile, and intent-only
+   functions must remain usable while the execution gate is blocked.
+4. Enable lifecycle and active repayment, configure invite and market allowlists, then switch Core to
+   `polymarket`. Do not mark the canary passed.
+5. Run the evidence sequence above. Raise no cap during the run.
+
+Rollback starts by blocking new risk, never by deleting records: set
+`CONVICTION_EXECUTION_MODE=disabled` and pause the vault if contract-level protection is required.
+Keep the deployed Core version capable of reconciliation, close, repayment, and no-fill restoration.
+Roll the frontend back independently only after preserving access to Portfolio recovery controls.
+Before reopening, reconcile every nonterminal record and require zero uncovered bad debt, healthy
+reserve coverage, and a green structured readiness response.
+
+Support must have the position/execution ID, wallet, condition ID, current state, and relevant Polygon
+hash before escalating. Never ask a user for a private key, API secret, recovery phrase, or signature
+payload.
 
 ## Incident actions
 
