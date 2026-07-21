@@ -52,6 +52,7 @@ import { createMarginRiskQuote } from "./margin-risk-quotes.js";
 import { normalizePolymarketMarginExecution } from "./polymarket-margin-execution.js";
 import {
   calculateFokBuyPriceLimit,
+  calculatePolymarketPositionHealth,
   classifyFokPostResult,
   formatSixDecimalAssets,
   parseSixDecimalAssets,
@@ -198,13 +199,7 @@ export async function recordPolymarketLoanReservation(input: {
     if (execution.loanId) return normalizePolymarketMarginExecution(execution);
     throw invalidState(execution.state, "record a reservation");
   }
-  if (execution.authorizationDeadline.getTime() <= Date.now()) {
-    throw new AppError("Execution authorization expired before reservation", {
-      code: "MARGIN_EXECUTION_AUTHORIZATION_EXPIRED",
-      statusCode: 409,
-    });
-  }
-
+  // A successful reserveLoan receipt proves the vault enforced the signed deadline at inclusion.
   const publicClient = polygonPublicClient();
   const receipt = await publicClient.waitForTransactionReceipt({
     hash: input.transactionHash.toLowerCase() as Hex,
@@ -486,11 +481,16 @@ export async function getPolymarketPositionControls(positionId: string, userId: 
     where: { executionId: execution.id },
     orderBy: { confirmedAt: "desc" },
   });
+  const health =
+    execution.state === PolymarketMarginExecutionState.OPEN && loan
+      ? await getCurrentPositionHealth(execution, loan.borrowAssets)
+      : null;
   return {
     activeRepaymentEnabled: env.polymarketActiveRepayEnabled,
     stopLossPrice: execution.stopLossPrice,
     takeProfitPrice: execution.takeProfitPrice,
     currentBorrowAssets: loan ? formatSixDecimalAssets(loan.borrowAssets) : null,
+    health,
     warning:
       "Stop-loss and take-profit are best-effort instructions. Thin liquidity, gaps, outages, and resolution can produce a different exit price.",
     repayments: repayments.map((repayment) => ({
@@ -499,6 +499,62 @@ export async function getPolymarketPositionControls(positionId: string, userId: 
       createdAt: repayment.createdAt.toISOString(),
     })),
   };
+}
+
+async function getCurrentPositionHealth(execution: ExecutionWithPosition, borrowAssets: bigint) {
+  const policy = await prisma.marginMarketPolicy.findUnique({
+    where: { marketId: execution.position.marketId },
+  });
+  const currentBorrowAssets = formatSixDecimalAssets(borrowAssets);
+  if (!policy) {
+    return {
+      status: "UNAVAILABLE" as const,
+      currentBorrowAssets,
+      executableExitPrice: null,
+      minimumExitProceeds: null,
+      maintenanceMarginBps: null,
+      debtCoverageBps: null,
+      requiredExitProceeds: null,
+      surplusAssets: null,
+      shortfallAssets: null,
+      observedAt: null,
+      warning:
+        "This position has no stored maintenance policy. Core will not classify it as healthy.",
+    };
+  }
+  try {
+    const quote = await createCloseQuote(execution, 500);
+    const calculated = calculatePolymarketPositionHealth({
+      borrowAssets: currentBorrowAssets,
+      maintenanceMarginBps: policy.maintenanceMarginBps,
+      minimumExitProceeds: quote.minimumProceeds,
+    });
+    return {
+      ...calculated,
+      currentBorrowAssets,
+      executableExitPrice: quote.depthFloorPrice,
+      minimumExitProceeds: quote.minimumProceeds,
+      maintenanceMarginBps: policy.maintenanceMarginBps,
+      observedAt: quote.observedAt,
+      warning:
+        "Health uses the conservative proceeds available for a full close after signed slippage and maximum venue fees.",
+    };
+  } catch {
+    return {
+      status: "UNAVAILABLE" as const,
+      currentBorrowAssets,
+      executableExitPrice: null,
+      minimumExitProceeds: null,
+      maintenanceMarginBps: policy.maintenanceMarginBps,
+      debtCoverageBps: null,
+      requiredExitProceeds: null,
+      surplusAssets: null,
+      shortfallAssets: null,
+      observedAt: null,
+      warning:
+        "Fresh full-position exit depth is unavailable. Core will not classify this position as healthy.",
+    };
+  }
 }
 
 export async function preparePolymarketPositionControls(input: {
@@ -872,10 +928,12 @@ async function assessOpenExecution(execution: ExecutionWithPosition) {
   }
 
   const loan = await readLoan(execution.vaultAddress, requiredLoanId(execution));
-  const conservativeValue = parseSixDecimalAssets(quote.minimumProceeds, "minimumProceeds");
-  const healthy =
-    conservativeValue * BigInt(10_000 - policy.maintenanceMarginBps) >= loan.borrowAssets * 10_000n;
-  if (healthy) return "HEALTHY";
+  const health = calculatePolymarketPositionHealth({
+    borrowAssets: formatSixDecimalAssets(loan.borrowAssets),
+    maintenanceMarginBps: policy.maintenanceMarginBps,
+    minimumExitProceeds: quote.minimumProceeds,
+  });
+  if (health.status === "HEALTHY") return "HEALTHY";
 
   const directCap = parseSixDecimalAssets(
     env.polymarketDirectLiquidationMaxAssets,
