@@ -6,8 +6,14 @@ import { verifyMessage } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { decryptJson, encryptJson } from "../src/lib/credentials.js";
-import { buildPolymarketAccountMessage } from "../src/lib/polymarket-link-message.js";
-import { assertPolymarketChallengeState } from "../src/services/polymarket-accounts.js";
+import {
+  buildPolymarketAccountMessage,
+  buildPolymarketAuthMessage,
+} from "../src/lib/polymarket-link-message.js";
+import {
+  assertPolymarketChallengeState,
+  resolvePolymarketAuthUserId,
+} from "../src/services/polymarket-accounts.js";
 
 const encryptionKey = Buffer.alloc(32, 7).toString("base64");
 
@@ -85,6 +91,83 @@ test("a link signature cannot be replayed across a different domain or user", as
       signature,
     }),
     false,
+  );
+});
+
+test("Polymarket sign-in message is deterministic and grants no trading authority", () => {
+  const input = {
+    ownerAddress: "0x1111111111111111111111111111111111111111",
+    funderAddress: "0x2222222222222222222222222222222222222222",
+    walletType: PolymarketWalletType.GNOSIS_SAFE,
+    nonce: "auth-nonce",
+    issuedAt: new Date("2026-07-21T05:00:00.000Z"),
+    expiresAt: new Date("2026-07-21T05:10:00.000Z"),
+  };
+  const message = buildPolymarketAuthMessage(input);
+
+  assert.equal(message, buildPolymarketAuthMessage(input));
+  assert.match(message, /Sign in with Polymarket/);
+  assert.match(message, /Domain: convictionmarkets\.xyz/);
+  assert.match(message, /Polygon chain: 137/);
+  assert.match(message, /auth-nonce/);
+  assert.match(message, /does not authorize a trade, token transfer, allowance, or API credential/);
+});
+
+test("Polymarket sign-in signature is bound to funder, nonce, and expiry", async () => {
+  const account = privateKeyToAccount(
+    "0x0000000000000000000000000000000000000000000000000000000000000002",
+  );
+  const input = {
+    ownerAddress: account.address,
+    funderAddress: account.address,
+    walletType: PolymarketWalletType.EOA,
+    nonce: "auth-nonce",
+    issuedAt: new Date("2026-07-21T05:00:00.000Z"),
+    expiresAt: new Date("2026-07-21T05:10:00.000Z"),
+  };
+  const message = buildPolymarketAuthMessage(input);
+  const signature = await account.signMessage({ message });
+
+  assert.equal(await verifyMessage({ address: account.address, message, signature }), true);
+  assert.equal(
+    await verifyMessage({
+      address: account.address,
+      message: buildPolymarketAuthMessage({ ...input, nonce: "attacker-nonce" }),
+      signature,
+    }),
+    false,
+  );
+  assert.equal(
+    await verifyMessage({
+      address: account.address,
+      message: buildPolymarketAuthMessage({
+        ...input,
+        expiresAt: new Date("2026-07-21T05:20:00.000Z"),
+      }),
+      signature,
+    }),
+    false,
+  );
+});
+
+test("Polymarket auth restores one identity and rejects cross-user mappings", () => {
+  assert.equal(resolvePolymarketAuthUserId(["user-a", "user-a"], "user-a"), "user-a");
+  assert.equal(resolvePolymarketAuthUserId([], "user-a"), "user-a");
+  assert.equal(resolvePolymarketAuthUserId([], null), null);
+
+  assert.throws(
+    () => resolvePolymarketAuthUserId(["user-a", "user-b"], null),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "POLYMARKET_AUTH_IDENTITY_CONFLICT",
+  );
+  assert.throws(
+    () => resolvePolymarketAuthUserId(["user-a"], "user-b"),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "POLYMARKET_AUTH_IDENTITY_CONFLICT",
   );
 });
 

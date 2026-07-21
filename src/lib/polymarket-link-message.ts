@@ -32,3 +32,29 @@ export function buildPolymarketAccountMessage(input: {
     "Signing proves account control. It does not authorize a trade or token transfer.",
   ].join("\n");
 }
+
+export function buildPolymarketAuthMessage(input: {
+  ownerAddress: string;
+  funderAddress: string;
+  walletType: PolymarketWalletType;
+  nonce: string;
+  issuedAt: Date;
+  expiresAt: Date;
+}) {
+  return [
+    "Conviction Markets",
+    "Sign in with Polymarket",
+    "Domain: convictionmarkets.xyz",
+    "URI: https://convictionmarkets.xyz",
+    "Polygon chain: 137",
+    "Polymarket owner: " + input.ownerAddress,
+    "Polymarket funder: " + input.funderAddress,
+    "Polymarket wallet type: " + input.walletType,
+    "Nonce: " + input.nonce,
+    "Issued at: " + input.issuedAt.toISOString(),
+    "Expires: " + input.expiresAt.toISOString(),
+    "",
+    "Signing opens a Conviction session for this wallet.",
+    "It does not authorize a trade, token transfer, allowance, or API credential.",
+  ].join("\n");
+}

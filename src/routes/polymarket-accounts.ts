@@ -5,7 +5,9 @@ import { sendSuccess } from "../lib/responses.js";
 import {
   completePolymarketAccountLink,
   completePolymarketAccountUnlink,
+  completePolymarketAuth,
   createPolymarketLinkChallenge,
+  createPolymarketAuthChallenge,
   createPolymarketUnlinkChallenge,
   listPolymarketAccounts,
   syncPolymarketAccount,
@@ -41,11 +43,63 @@ type CompleteUnlinkBody = {
   polymarketSignature?: string | null;
 };
 
+type AuthChallengeBody = {
+  ownerAddress: string;
+};
+
+type AuthSessionBody = {
+  challengeId: string;
+  signature: string;
+};
+
 const walletTypeValues = Object.values(PolymarketWalletType);
 const addressSchema = { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" };
 const signatureSchema = { type: "string", pattern: "^0x[a-fA-F0-9]+$", minLength: 130 };
 
 export async function registerPolymarketAccountRoutes(app: FastifyInstance) {
+  app.post<{ Body: AuthChallengeBody }>(
+    "/auth/polymarket/challenges",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["ownerAddress"],
+          additionalProperties: false,
+          properties: {
+            ownerAddress: addressSchema,
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const challenge = await createPolymarketAuthChallenge(request.body);
+
+      return sendSuccess(reply, { challenge }, 201);
+    },
+  );
+
+  app.post<{ Body: AuthSessionBody }>(
+    "/auth/polymarket/sessions",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["challengeId", "signature"],
+          additionalProperties: false,
+          properties: {
+            challengeId: { type: "string", minLength: 1 },
+            signature: signatureSchema,
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const authentication = await completePolymarketAuth(request.body);
+
+      return sendSuccess(reply, authentication, 201);
+    },
+  );
+
   app.get<{ Params: UserParams }>("/users/:userId/polymarket/accounts", async (request, reply) => {
     const accounts = await listPolymarketAccounts(request.params.userId);
 

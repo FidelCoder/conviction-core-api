@@ -17,6 +17,7 @@ enum AuthProvider {
   EVM_EOA
   THIRDWEB_SMART_WALLET
   TON_WALLET
+  POLYMARKET_WALLET
   TELEGRAM
   FARCASTER
   UNKNOWN
@@ -37,6 +38,7 @@ enum PolymarketAccountStatus {
 }
 
 enum PolymarketChallengePurpose {
+  AUTH
   LINK
   UNLINK
 }
@@ -335,7 +337,7 @@ model PolymarketAccount {
 
 model PolymarketLinkChallenge {
   id                      String                     @id @default(auto()) @map("_id") @db.ObjectId
-  userId                  String                     @db.ObjectId
+  userId                  String?                    @db.ObjectId
   accountId               String?                    @db.ObjectId
   purpose                 PolymarketChallengePurpose
   convictionAddress       String
@@ -348,7 +350,7 @@ model PolymarketLinkChallenge {
   expiresAt               DateTime
   consumedAt              DateTime?
   createdAt               DateTime                   @default(now())
-  user                    User                       @relation(fields: [userId], references: [id], onDelete: NoAction)
+  user                    User?                      @relation(fields: [userId], references: [id], onDelete: NoAction)
   account                 PolymarketAccount?         @relation(fields: [accountId], references: [id], onDelete: NoAction)
 
   @@index([userId])
