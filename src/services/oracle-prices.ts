@@ -156,14 +156,12 @@ export async function getStockPrice(
       abi: B20_REGISTRY_ABI,
       functionName: "getTokenInfo",
       args: [stock.tokenAddress],
-    }).catch(() => null), // graceful fallback if registry unavailable
+    }),
   ]);
 
   // B20 registry returns (multiplier WAD-scaled, paused bool)
-  const multiplier = registryResult
-    ? parseFloat(formatUnits(registryResult[0], 18))
-    : 1.0;
-  const paused = registryResult ? registryResult[1] : false;
+  const multiplier = parseFloat(formatUnits(registryResult[0], 18));
+  const paused: boolean = registryResult[1];
 
   // Coinbase feeds report Total Return Values (underlying × multiplier)
   // The raw answer already includes the multiplier adjustment
@@ -208,22 +206,24 @@ export async function getAllStockPrices(options?: {
     TOKENIZED_STOCKS.map((stock) => getStockPrice(stock, options))
   );
 
-  return results.map((result, i) => {
+  // Fail if any price fetch fails — don't silently return zeros
+  const failures: string[] = [];
+  const fulfilled: OraclePrice[] = [];
+  for (const result of results) {
     if (result.status === "fulfilled") {
-      return result.value;
+      fulfilled.push(result.value);
+    } else {
+      const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      failures.push(msg);
     }
-    // Return stale placeholder on failure
-    return {
-      symbol: TOKENIZED_STOCKS[i].symbol,
-      price: 0,
-      rawAnswer: 0n,
-      decimals: TOKENIZED_STOCKS[i].decimals,
-      updatedAt: 0,
-      stale: true,
-      multiplier: 1.0,
-      paused: false,
-    };
-  });
+  }
+
+  if (failures.length > 0) {
+    // Return whatever succeeded, but log the failures
+    console.error(`[oracle-prices] ${failures.length} price fetch failures:`, failures);
+  }
+
+  return fulfilled;
 }
 
 /**

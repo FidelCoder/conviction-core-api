@@ -46,7 +46,7 @@ type QuoteBody = {
 type SimulateSettlementBody = {
   symbol: string;
   optionId: number;
-  mockFinalPrice: number;
+  finalPrice: number;
 };
 
 // ---------------------------------------------------------------
@@ -510,19 +510,19 @@ export async function registerEquityVaultRoutes(app: FastifyInstance) {
         },
         body: {
           type: "object",
-          required: ["symbol", "optionId", "mockFinalPrice"],
+          required: ["symbol", "optionId", "finalPrice"],
           additionalProperties: false,
           properties: {
             symbol: { type: "string", minLength: 1 },
             optionId: { type: "integer", minimum: 0 },
-            mockFinalPrice: { type: "number", minimum: 0 },
+            finalPrice: { type: "number", minimum: 0 },
           },
         },
       },
     },
     async (request, reply) => {
       const { vaultAddress } = request.params;
-      const { symbol, optionId, mockFinalPrice } = request.body;
+      const { symbol, optionId, finalPrice } = request.body;
 
       const vault = getOrCreateVault(vaultAddress);
       const option = vault.options.find(
@@ -540,7 +540,7 @@ export async function registerEquityVaultRoutes(app: FastifyInstance) {
         option.strikePrice,
         option.premium,
         option.collateralLocked,
-        mockFinalPrice
+        finalPrice
       );
 
       return sendSuccess(reply, { simulation });

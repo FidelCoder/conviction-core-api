@@ -155,11 +155,11 @@ export async function settleAllEligible(
 
 /**
  * Simulate settlement for demo purposes.
- * Given a mock final price, show what would happen.
+ * Given a hypothetical final price, show what would happen.
  */
 export function simulateSettlement(
   option: ActiveOption,
-  mockFinalPrice: number
+  finalPrice: number
 ): SettlementParams {
   return generateSettlementParams(
     option.optionId,
@@ -167,6 +167,6 @@ export function simulateSettlement(
     option.strikePrice,
     option.premium,
     option.collateralLocked,
-    mockFinalPrice
+    finalPrice
   );
 }

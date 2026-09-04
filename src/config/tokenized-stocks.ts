@@ -48,7 +48,6 @@ export const B20_STANDARD = {
 /**
  * B20 Tokenized Stock addresses on Base mainnet.
  * These are the official Coinbase-issued tokens.
- * Note: Addresses are placeholders — replace with actual deployed addresses.
  */
 /**
  * B20 Tokenized Stock contract addresses on Base mainnet.
