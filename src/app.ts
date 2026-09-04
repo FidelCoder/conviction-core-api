@@ -13,6 +13,7 @@ import { registerMarginRiskRoutes } from "./routes/margin-risk.js";
 import { registerOmnistonQuoteRoutes } from "./routes/omniston-quotes.js";
 import { registerOperationsRoutes } from "./routes/operations.js";
 import { registerPolymarketAccountRoutes } from "./routes/polymarket-accounts.js";
+import { registerEquityVaultRoutes } from "./routes/equity-vaults.js";
 import { registerPositionRoutes } from "./routes/positions.js";
 import { registerPreferenceRoutes } from "./routes/preferences.js";
 import { registerSignalRoutes } from "./routes/signals.js";
@@ -51,6 +52,7 @@ export async function buildApp() {
   await registerSupportRoutes(app);
   await registerTelegramRoutes(app);
   await registerTonVaultRoutes(app);
+  await registerEquityVaultRoutes(app);
   await registerPositionRoutes(app);
   await registerStatsRoutes(app);
 
