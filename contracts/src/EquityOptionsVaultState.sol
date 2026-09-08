@@ -43,7 +43,7 @@ abstract contract EquityOptionsVaultState {
     }
 
     struct VaultShare {
-        uint256 totalShares;     // total vault shares outstanding
+        uint256 totalShares;     // total vault shares outstanding (excluding dead shares)
         uint256 totalAssets;     // total underlying deposited (in underlying decimals)
         uint256 totalPremiumEarned; // cumulative premium in USDC
     }
@@ -58,13 +58,36 @@ abstract contract EquityOptionsVaultState {
     uint256 public constant DEFAULT_VOL_BPS = 30_000; // 30% implied vol
     uint256 public constant RISK_FREE_RATE_BPS = 500; // 5% annual
 
+    /// @notice Minimum shares minted on first deposit to prevent share inflation attack.
+    ///         These "dead shares" are minted to address(dead) and never redeemable.
+    uint256 public constant MIN_DEAD_SHARES = 1000;
+
+    /// @notice Maximum option expiry: 90 days
+    uint256 public constant MAX_EXPIRY = 90 days;
+
+    /// @notice Minimum option expiry: 1 hour
+    uint256 public constant MIN_EXPIRY = 1 hours;
+
+    /// @notice Maximum vault utilization: 70% (7000 bps)
+    uint256 public constant MAX_UTILIZATION_BPS = 7000;
+
+    /// @notice Maximum strike delta: 150% ITM (15000 bps)
+    uint256 public constant MAX_STRIKE_DELTA_BPS = 15000;
+
+    /// @notice Maximum implied vol override: 100% (10000 bps)
+    uint256 public constant MAX_VOL_BPS = 10000;
+
     // ---------------------------------------------------------------
     //  Storage
     // ---------------------------------------------------------------
 
     address public owner;
-    address public operator; // can write options and settle
+    address public pendingOwner;    // two-step ownership transfer
+    address public operator;        // can write options and settle
     bool public paused;
+
+    /// @notice Chainlink-compatible oracle address for price feeds (set by owner).
+    address public oracle;
 
     // Vault share accounting per underlying token
     mapping(address underlyingToken => VaultShare share) public vaultShares;
@@ -75,6 +98,9 @@ abstract contract EquityOptionsVaultState {
     // Active covered calls per underlying token
     mapping(address underlyingToken => mapping(uint256 optionId => CoveredCall call)) public coveredCalls;
     mapping(address underlyingToken => uint256) public nextOptionId;
+
+    /// @notice Count of currently ACTIVE options per token (for O(1) utilization checks).
+    mapping(address underlyingToken => uint256) public activeOptionCount;
 
     // Strategy config per underlying token
     mapping(address underlyingToken => Strategy strategy) public tokenStrategy;
@@ -134,9 +160,12 @@ abstract contract EquityOptionsVaultState {
         uint256 expirySeconds
     );
 
-    event OperatorUpdated(address indexed operator, bool enabled);
+    event OperatorUpdated(address indexed previousOperator, address indexed newOperator);
     event PauseStatusUpdated(bool paused);
     event TokenSupportUpdated(address indexed token, bool supported);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OracleUpdated(address indexed previousOracle, address indexed newOracle);
 
     // ---------------------------------------------------------------
     //  Errors
@@ -155,6 +184,14 @@ abstract contract EquityOptionsVaultState {
     error InvalidExpiry();
     error ReentrantCall();
     error TransferFailed();
+    error InvalidAddress();
+    error ExpiryTooShort();
+    error ExpiryTooLong();
+    error UtilizationExceeded();
+    error SettlementAmountExceeded();
+    error InvalidSettlementPrice();
+    error OwnershipNotPending();
+    error ZeroSharesMinted();
 
     // ---------------------------------------------------------------
     //  Modifiers
@@ -185,6 +222,7 @@ abstract contract EquityOptionsVaultState {
     bool private locked;
 
     constructor(address initialOwner) {
+        if (initialOwner == address(0)) revert InvalidAddress();
         owner = initialOwner;
         operator = initialOwner;
     }

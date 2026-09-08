@@ -8,13 +8,38 @@ abstract contract EquityOptionsVaultAccounting is EquityOptionsVaultState {
     constructor(address initialOwner) EquityOptionsVaultState(initialOwner) {}
 
     // ---------------------------------------------------------------
-    //  Admin
+    //  Admin — Ownership (two-step)
+    // ---------------------------------------------------------------
+
+    /// @notice Start ownership transfer. Only callable by current owner.
+    function transferOwnership(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert InvalidAddress();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    /// @notice Accept ownership. Only callable by pending owner.
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert OwnershipNotPending();
+        emit OwnershipTransferred(owner, msg.sender);
+        owner = msg.sender;
+        pendingOwner = address(0);
+    }
+
+    // ---------------------------------------------------------------
+    //  Admin — Operator
     // ---------------------------------------------------------------
 
     function setOperator(address nextOperator) external onlyOwner {
+        if (nextOperator == address(0)) revert InvalidAddress();
+        address prev = operator;
         operator = nextOperator;
-        emit OperatorUpdated(nextOperator, true);
+        emit OperatorUpdated(prev, nextOperator);
     }
+
+    // ---------------------------------------------------------------
+    //  Admin — Pause / Token / Strategy / Oracle
+    // ---------------------------------------------------------------
 
     function setPaused(bool nextPaused) external onlyOwner {
         paused = nextPaused;
@@ -22,8 +47,16 @@ abstract contract EquityOptionsVaultAccounting is EquityOptionsVaultState {
     }
 
     function setTokenSupport(address underlyingToken, bool supported) external onlyOwner {
+        if (underlyingToken == address(0)) revert InvalidAddress();
         supportedTokens[underlyingToken] = supported;
         emit TokenSupportUpdated(underlyingToken, supported);
+    }
+
+    function setOracle(address newOracle) external onlyOwner {
+        if (newOracle == address(0)) revert InvalidAddress();
+        address prev = oracle;
+        oracle = newOracle;
+        emit OracleUpdated(prev, newOracle);
     }
 
     function setStrategy(
@@ -34,8 +67,9 @@ abstract contract EquityOptionsVaultAccounting is EquityOptionsVaultState {
         uint256 volOverrideBps
     ) external onlyOwner {
         if (!supportedTokens[underlyingToken]) revert TokenNotSupported(underlyingToken);
-        if (strikeDeltaBps == 0 || strikeDeltaBps > 2 * BPS) revert InvalidStrike();
-        if (expirySeconds == 0) revert InvalidExpiry();
+        if (strikeDeltaBps == 0 || strikeDeltaBps > MAX_STRIKE_DELTA_BPS) revert InvalidStrike();
+        if (expirySeconds < MIN_EXPIRY || expirySeconds > MAX_EXPIRY) revert InvalidExpiry();
+        if (volOverrideBps > MAX_VOL_BPS) revert InvalidStrike(); // reuse error for vol cap
 
         tokenStrategy[underlyingToken] = strategy;
         tokenStrategyParams[underlyingToken] = StrategyParams({
@@ -65,14 +99,21 @@ abstract contract EquityOptionsVaultAccounting is EquityOptionsVaultState {
         VaultShare storage vs = vaultShares[underlyingToken];
         uint256 sharesMinted;
         if (vs.totalShares == 0) {
-            // First deposit: 1:1 share ratio
+            // First deposit: mint MIN_DEAD_SHARES to dead address to prevent
+            // share inflation attack, then 1:1 for the depositor.
+            uint256 deadShares = MIN_DEAD_SHARES;
+            vs.totalShares = deadShares + received;
+            vs.totalAssets = received;
+            userShares[underlyingToken][address(0xdead)] = deadShares;
             sharesMinted = received;
         } else {
             sharesMinted = (received * vs.totalShares) / vs.totalAssets;
+            vs.totalAssets += received;
+            vs.totalShares += sharesMinted;
         }
 
-        vs.totalAssets += received;
-        vs.totalShares += sharesMinted;
+        if (sharesMinted == 0) revert ZeroSharesMinted();
+
         userShares[underlyingToken][msg.sender] += sharesMinted;
 
         emit Deposited(msg.sender, underlyingToken, received, sharesMinted);
@@ -139,10 +180,18 @@ abstract contract EquityOptionsVaultAccounting is EquityOptionsVaultState {
         lockedAmount = _getTotalLocked(underlyingToken);
     }
 
+    function getUtilizationBps(address underlyingToken) external view returns (uint256) {
+        VaultShare storage vs = vaultShares[underlyingToken];
+        if (vs.totalAssets == 0) return 0;
+        uint256 locked = _getTotalLocked(underlyingToken);
+        return (locked * BPS) / vs.totalAssets;
+    }
+
     // ---------------------------------------------------------------
     //  Internal helpers
     // ---------------------------------------------------------------
 
+    /// @notice Sum collateralLocked across all ACTIVE options. O(activeCount) not O(totalCreated).
     function _getTotalLocked(address underlyingToken) internal view returns (uint256 total) {
         uint256 count = nextOptionId[underlyingToken];
         for (uint256 i = 0; i < count; i++) {

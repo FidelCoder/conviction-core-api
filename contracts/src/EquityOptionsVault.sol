@@ -30,14 +30,21 @@ contract EquityOptionsVault is EquityOptionsVaultAccounting {
     ) external onlyOperator nonReentrant whenNotPaused {
         if (!supportedTokens[underlyingToken]) revert TokenNotSupported(underlyingToken);
         if (strikePrice == 0) revert InvalidStrike();
-        if (expiry <= block.timestamp) revert InvalidExpiry();
         if (collateralAmount == 0) revert InvalidAmount();
+
+        // Expiry bounds: must be between MIN_EXPIRY and MAX_EXPIRY from now
+        if (expiry <= block.timestamp + MIN_EXPIRY) revert ExpiryTooShort();
+        if (expiry > block.timestamp + MAX_EXPIRY) revert ExpiryTooLong();
 
         // Ensure vault has enough unlocked underlying
         VaultShare storage vs = vaultShares[underlyingToken];
         uint256 totalLocked = _getTotalLocked(underlyingToken);
         uint256 available = vs.totalAssets - totalLocked;
         if (available < collateralAmount) revert InsufficientBalance();
+
+        // Max utilization check: new lock + existing locks <= 70% of totalAssets
+        uint256 newTotalLocked = totalLocked + collateralAmount;
+        if (newTotalLocked * BPS > vs.totalAssets * MAX_UTILIZATION_BPS) revert UtilizationExceeded();
 
         uint256 optionId = nextOptionId[underlyingToken]++;
 
@@ -52,6 +59,9 @@ contract EquityOptionsVault is EquityOptionsVaultAccounting {
             settledAt: 0,
             settlementPrice: 0
         });
+
+        // Track active option count for O(1) utilization checks
+        activeOptionCount[underlyingToken]++;
 
         emit CoveredCallWritten(
             underlyingToken,
@@ -83,12 +93,18 @@ contract EquityOptionsVault is EquityOptionsVaultAccounting {
         if (cc.status != OptionStatus.ACTIVE) revert OptionAlreadySettled();
         if (block.timestamp < cc.expiry) revert OptionNotExpired();
 
+        // Settlement validation: cannot settle more than locked collateral
+        if (settlementAmount > cc.collateralLocked) revert SettlementAmountExceeded();
+
+        // Final price sanity: must be non-zero
+        if (finalPrice == 0) revert InvalidSettlementPrice();
+
         VaultShare storage vs = vaultShares[underlyingToken];
 
         if (finalPrice >= cc.strikePrice) {
             // ITM: option exercised. Vault sells underlying at strike.
             // settlementAmount worth of underlying is sold at strikePrice.
-            // Premium + strike proceeds go to vault (distributed as yield).
+            // Premium + strike proceeds go to vault yield pool.
             uint256 strikeProceeds = (settlementAmount * cc.strikePrice) / (10 ** PRICE_DECIMALS);
 
             cc.status = OptionStatus.EXERCISED;
@@ -127,6 +143,9 @@ contract EquityOptionsVault is EquityOptionsVaultAccounting {
                 cc.premium
             );
         }
+
+        // Decrement active option count
+        activeOptionCount[underlyingToken]--;
     }
 
     // ---------------------------------------------------------------
@@ -134,11 +153,10 @@ contract EquityOptionsVault is EquityOptionsVaultAccounting {
     // ---------------------------------------------------------------
 
     /// @notice User claims their share of accumulated premium.
-    ///         Premium is proportional to vault shares held.
+    ///         Premium is automatically reflected in share price via totalAssets.
+    ///         This function emits an event for UX; the real yield is realized
+    ///         on withdraw at higher share price.
     function claimPremium(address underlyingToken) external nonReentrant {
-        // Premium is automatically reflected in share price via totalAssets.
-        // This function is a no-op for accounting but emits an event for UX.
-        // The real yield is realized on withdraw at higher share price.
         emit PremiumDistributed(
             underlyingToken,
             vaultShares[underlyingToken].totalPremiumEarned,
@@ -151,14 +169,7 @@ contract EquityOptionsVault is EquityOptionsVaultAccounting {
     // ---------------------------------------------------------------
 
     function getActiveOptionsCount(address underlyingToken) external view returns (uint256) {
-        uint256 count = 0;
-        uint256 total = nextOptionId[underlyingToken];
-        for (uint256 i = 0; i < total; i++) {
-            if (coveredCalls[underlyingToken][i].status == OptionStatus.ACTIVE) {
-                count++;
-            }
-        }
-        return count;
+        return activeOptionCount[underlyingToken];
     }
 
     function getOptionDetails(

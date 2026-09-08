@@ -9,6 +9,7 @@ interface Vm {
     function startPrank(address sender) external;
     function stopPrank() external;
     function warp(uint256 newTimestamp) external;
+    function expectRevert(bytes calldata data) external;
 }
 
 /// @dev Minimal mock ERC20 for testing
@@ -61,6 +62,7 @@ contract EquityOptionsVaultTest {
     address private operatorAddr = address(0x2);
     address private alice = address(0xA);
     address private bob = address(0xB);
+    address private dead = address(0xdead);
 
     uint256 private constant STRIKE_PRICE = 12807_00000000;
     uint256 private constant PREMIUM = 50e6;
@@ -91,6 +93,14 @@ contract EquityOptionsVaultTest {
         vm.stopPrank();
     }
 
+    function _depositBob(uint256 amount) internal {
+        nvda.mint(bob, amount);
+        vm.startPrank(bob);
+        nvda.approve(address(vault), amount);
+        vault.deposit(address(nvda), amount);
+        vm.stopPrank();
+    }
+
     // ---------------------------------------------------------------
     //  Deposit tests
     // ---------------------------------------------------------------
@@ -104,7 +114,8 @@ contract EquityOptionsVaultTest {
 
         (uint256 totalAssets, uint256 totalShares,,, ) = vault.getVaultStats(address(nvda));
         require(totalAssets == 3 ether, "totalAssets wrong");
-        require(totalShares == 3 ether, "totalShares wrong");
+        // totalShares = MIN_DEAD_SHARES (1000) + 3 ether
+        require(totalShares == 3 ether + 1000, "totalShares wrong");
     }
 
     function testDeposit_secondDeposit_proRata() public {
@@ -117,12 +128,14 @@ contract EquityOptionsVaultTest {
         vault.deposit(address(nvda), 5 ether);
         vm.stopPrank();
 
+        // Bob gets slightly more than 5 ether shares due to dead shares dilution
         (uint256 bobShares,) = vault.getUserBalance(address(nvda), bob);
-        require(bobShares == 5 ether, "bob shares wrong");
+        require(bobShares > 5 ether, "bob should get > 5 ether shares due to dead shares");
 
         (uint256 totalAssets, uint256 totalShares,,, ) = vault.getVaultStats(address(nvda));
         require(totalAssets == 8 ether, "totalAssets wrong");
-        require(totalShares == 8 ether, "totalShares wrong");
+        // totalShares = deadShares(1000) + alice(3e18) + bob(>5e18)
+        require(totalShares > 8 ether + 1000, "totalShares should exceed 8 ether + dead shares");
     }
 
     function testDeposit_revertsForUnsupported() public {
@@ -151,6 +164,15 @@ contract EquityOptionsVaultTest {
         require(reverted, "should revert for zero amount");
     }
 
+    function testDeposit_deadSharesMintedOnFirst() public {
+        _enableToken();
+        _depositAlice(1000 ether);
+
+        // Dead address should have MIN_DEAD_SHARES
+        uint256 deadShares = vault.userShares(address(nvda), dead);
+        require(deadShares == 1000, "dead shares should be 1000");
+    }
+
     // ---------------------------------------------------------------
     //  Withdraw tests
     // ---------------------------------------------------------------
@@ -165,7 +187,10 @@ contract EquityOptionsVaultTest {
 
         (uint256 shares,) = vault.getUserBalance(address(nvda), alice);
         require(shares == 2 ether, "shares should be 2 after withdrawing 3 of 5");
-        require(nvda.balanceOf(alice) == 3 ether, "should get back 3 underlying");
+
+        // Due to dead shares, alice gets back slightly less than 3 ether
+        uint256 aliceBalance = nvda.balanceOf(alice);
+        require(aliceBalance > 2.99 ether, "should get back approximately 3 underlying");
     }
 
     function testWithdraw_partial() public {
@@ -233,16 +258,18 @@ contract EquityOptionsVaultTest {
         _enableToken();
         _depositAlice(5 ether);
 
+        // Lock 3.5 ether (70% = max utilization)
         vm.prank(operatorAddr);
-        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 5 ether);
+        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 3.5 ether);
 
+        // Try to lock 1 more ether — total would be 4.5/5 = 90% > 70% max
         bool reverted;
         vm.prank(operatorAddr);
         try vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, 10e6, 1 ether) {
         } catch {
             reverted = true;
         }
-        require(reverted, "should revert when insufficient available");
+        require(reverted, "should revert when exceeds max utilization");
     }
 
     function testWriteCoveredCall_revertsIfNotOperator() public {
@@ -260,7 +287,114 @@ contract EquityOptionsVaultTest {
     }
 
     // ---------------------------------------------------------------
-    //  Settle Option tests
+    //  Security: Expiry bounds
+    // ---------------------------------------------------------------
+
+    function testWriteCoveredCall_revertsIfExpiryTooShort() public {
+        _enableToken();
+        _depositAlice(5 ether);
+
+        // Expiry 30 minutes from now (< MIN_EXPIRY of 1 hour)
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 30 minutes, PREMIUM, 1 ether) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for expiry too short");
+    }
+
+    function testWriteCoveredCall_revertsIfExpiryTooLong() public {
+        _enableToken();
+        _depositAlice(5 ether);
+
+        // Expiry 91 days from now (> MAX_EXPIRY of 90 days)
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 91 days, PREMIUM, 1 ether) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for expiry too long");
+    }
+
+    function testWriteCoveredCall_revertsIfExpiryInPast() public {
+        _enableToken();
+        _depositAlice(5 ether);
+
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp - 1, PREMIUM, 1 ether) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for past expiry");
+    }
+
+    // ---------------------------------------------------------------
+    //  Security: Max utilization
+    // ---------------------------------------------------------------
+
+    function testWriteCoveredCall_revertsIfExceedsMaxUtilization() public {
+        _enableToken();
+        _depositAlice(10 ether);
+
+        // Try to lock 8 ether out of 10 (80% > 70% max)
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 8 ether) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert when utilization exceeds 70%");
+    }
+
+    function testWriteCoveredCall_allowsAtMaxUtilization() public {
+        _enableToken();
+        _depositAlice(10 ether);
+
+        // Lock 7 ether out of 10 (70% = max)
+        vm.prank(operatorAddr);
+        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 7 ether);
+
+        (,,,, EquityOptionsVaultState.OptionStatus status,) = vault.getOptionDetails(address(nvda), 0);
+        require(uint256(status) == uint256(EquityOptionsVaultState.OptionStatus.ACTIVE), "should succeed at 70%");
+    }
+
+    function testWriteCoveredCall_respectsCumulativeUtilization() public {
+        _enableToken();
+        _depositAlice(10 ether);
+
+        // First: lock 5 ether (50%)
+        vm.prank(operatorAddr);
+        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 5 ether);
+
+        // Second: try to lock 3 more (total 80% > 70%)
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 3 ether) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert when cumulative utilization exceeds max");
+    }
+
+    function testGetUtilizationBps() public {
+        _enableToken();
+        _depositAlice(10 ether);
+
+        uint256 util = vault.getUtilizationBps(address(nvda));
+        require(util == 0, "should be 0 with no options");
+
+        vm.prank(operatorAddr);
+        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 5 ether);
+
+        util = vault.getUtilizationBps(address(nvda));
+        require(util == 5000, "should be 50% (5000 bps)");
+    }
+
+    // ---------------------------------------------------------------
+    //  Security: Settlement validation
     // ---------------------------------------------------------------
 
     function testSettle_OTM() public {
@@ -302,6 +436,7 @@ contract EquityOptionsVaultTest {
         require(totalPremium == PREMIUM + expectedStrikeProceeds, "premium + strike proceeds wrong");
 
         (uint256 totalAssets,,, ,) = vault.getVaultStats(address(nvda));
+        // 5 ether deposited - 3 ether sold at strike = 2 ether remaining
         require(totalAssets == 2 ether, "underlying should be reduced");
     }
 
@@ -340,6 +475,57 @@ contract EquityOptionsVaultTest {
         require(reverted, "should revert if already settled");
     }
 
+    function testSettle_revertsIfSettlementExceedsCollateral() public {
+        _enableToken();
+        _depositAlice(5 ether);
+
+        vm.prank(operatorAddr);
+        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 3 ether);
+
+        vm.warp(block.timestamp + 14 days + 1);
+
+        // Try to settle 4 ether when only 3 ether is locked
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.settleOption(address(nvda), 0, 150_00_00000000, 4 ether) { } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert when settlement exceeds locked collateral");
+    }
+
+    function testSettle_revertsIfFinalPriceZero() public {
+        _enableToken();
+        _depositAlice(5 ether);
+
+        vm.prank(operatorAddr);
+        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 3 ether);
+
+        vm.warp(block.timestamp + 14 days + 1);
+
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.settleOption(address(nvda), 0, 0, 0) { } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for zero final price");
+    }
+
+    function testSettle_decrementsActiveCount() public {
+        _enableToken();
+        _depositAlice(5 ether);
+
+        vm.prank(operatorAddr);
+        vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 2 ether);
+
+        require(vault.getActiveOptionsCount(address(nvda)) == 1, "should be 1 active");
+
+        vm.warp(block.timestamp + 14 days + 1);
+        vm.prank(operatorAddr);
+        vault.settleOption(address(nvda), 0, 120_00_00000000, 0);
+
+        require(vault.getActiveOptionsCount(address(nvda)) == 0, "should be 0 active after settle");
+    }
+
     // ---------------------------------------------------------------
     //  Share price tests
     // ---------------------------------------------------------------
@@ -349,7 +535,8 @@ contract EquityOptionsVaultTest {
         _depositAlice(5 ether);
 
         uint256 priceBefore = vault.getSharePrice(address(nvda));
-        require(priceBefore == 1e18, "initial share price should be 1e18");
+        // Share price is slightly less than 1e18 due to dead shares
+        require(priceBefore > 0, "initial share price should be > 0");
 
         vm.prank(operatorAddr);
         vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, 100e6, 3 ether);
@@ -386,6 +573,30 @@ contract EquityOptionsVaultTest {
             reverted = true;
         }
         require(reverted, "should revert for unsupported token");
+    }
+
+    function testSetStrategy_revertsIfStrikeDeltaTooHigh() public {
+        _enableToken();
+
+        bool reverted;
+        vm.prank(ownerAddr);
+        try vault.setStrategy(address(nvda), EquityOptionsVaultState.Strategy.AGGRESSIVE, 16000, 14 days, 0) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for strike delta > 150%");
+    }
+
+    function testSetStrategy_revertsIfVolTooHigh() public {
+        _enableToken();
+
+        bool reverted;
+        vm.prank(ownerAddr);
+        try vault.setStrategy(address(nvda), EquityOptionsVaultState.Strategy.AGGRESSIVE, 10000, 14 days, 11000) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for vol > 100%");
     }
 
     // ---------------------------------------------------------------
@@ -425,6 +636,106 @@ contract EquityOptionsVaultTest {
         require(shares == 2 ether, "should have 2 shares after partial withdraw");
     }
 
+    function testPaused_blocksWriteCoveredCall() public {
+        _enableToken();
+        _depositAlice(5 ether);
+
+        vm.prank(ownerAddr);
+        vault.setPaused(true);
+
+        bool reverted;
+        vm.prank(operatorAddr);
+        try vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 14 days, PREMIUM, 1 ether) {
+        } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert when paused");
+    }
+
+    // ---------------------------------------------------------------
+    //  Security: Ownership transfer
+    // ---------------------------------------------------------------
+
+    function testOwnershipTransfer_twoStep() public {
+        address newOwner = address(0xC);
+
+        vm.prank(ownerAddr);
+        vault.transferOwnership(newOwner);
+
+        require(vault.pendingOwner() == newOwner, "pending owner should be set");
+        require(vault.owner() == ownerAddr, "owner should not change yet");
+
+        vm.prank(newOwner);
+        vault.acceptOwnership();
+
+        require(vault.owner() == newOwner, "owner should be new owner");
+        require(vault.pendingOwner() == address(0), "pending owner should be cleared");
+    }
+
+    function testOwnershipTransfer_revertsIfNotPending() public {
+        address newOwner = address(0xC);
+
+        vm.prank(ownerAddr);
+        vault.transferOwnership(newOwner);
+
+        // Random address tries to accept
+        bool reverted;
+        vm.prank(alice);
+        try vault.acceptOwnership() { } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert if not pending owner");
+    }
+
+    function testOwnershipTransfer_revertsIfZeroAddress() public {
+        bool reverted;
+        vm.prank(ownerAddr);
+        try vault.transferOwnership(address(0)) { } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for zero address");
+    }
+
+    function testSetOperator_revertsIfZeroAddress() public {
+        bool reverted;
+        vm.prank(ownerAddr);
+        try vault.setOperator(address(0)) { } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for zero address operator");
+    }
+
+    // ---------------------------------------------------------------
+    //  Security: Zero address checks
+    // ---------------------------------------------------------------
+
+    function testSetTokenSupport_revertsIfZeroAddress() public {
+        bool reverted;
+        vm.prank(ownerAddr);
+        try vault.setTokenSupport(address(0), true) { } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for zero address token");
+    }
+
+    function testSetOracle_revertsIfZeroAddress() public {
+        bool reverted;
+        vm.prank(ownerAddr);
+        try vault.setOracle(address(0)) { } catch {
+            reverted = true;
+        }
+        require(reverted, "should revert for zero address oracle");
+    }
+
+    function testSetOracle_setsCorrectly() public {
+        address oracleAddr = address(0x42);
+
+        vm.prank(ownerAddr);
+        vault.setOracle(oracleAddr);
+
+        require(vault.oracle() == oracleAddr, "oracle should be set");
+    }
+
     // ---------------------------------------------------------------
     //  Settlement integration tests
     // ---------------------------------------------------------------
@@ -454,7 +765,7 @@ contract EquityOptionsVaultTest {
         _enableToken();
         _depositAlice(5 ether);
 
-        // Write two options
+        // Write two options (each 1 ether = 20% each, total 40% < 70% max)
         vm.prank(operatorAddr);
         vault.writeCoveredCall(address(nvda), STRIKE_PRICE, block.timestamp + 7 days, 30e6, 1 ether);
 
